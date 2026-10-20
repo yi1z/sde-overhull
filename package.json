@@ -94,7 +94,7 @@
         }
       ],
       "category": "public.app-category.developer-tools",
-      "identity": null
+      "identity": "-"
     },
     "linux": {
       "icon": "build/icon.png",

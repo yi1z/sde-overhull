@@ -308,6 +308,8 @@ test('opens a real repository and shows the design workflow', async () => {
 });
 
 test('edits a diagram with actual dragging, connections, grouping and persisted JSON', async () => {
+  // Exercise compact desktop layouts, including the native macOS CI display.
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 680));
   await focusApplication();
   await page.getByRole('button', { name: 'How the team works', exact: true }).click();
   const actor = page.locator('.react-flow__node[data-id="user"] .sde-flow-node-header');
@@ -409,6 +411,18 @@ test('edits and previews a real Puck prototype without losing its source', async
   await expect(page.locator('.prototype-puck')).toBeVisible();
   const frame = page.frameLocator('.prototype-puck iframe');
   await expect(frame.getByRole('heading', { name: 'Welcome', exact: true })).toBeVisible();
+  const compactEditor = page.locator('.prototype-responsive-layout');
+  await expect(compactEditor).toHaveAttribute('data-compact', 'true');
+  expect((await page.locator('.prototype-compact-canvas').boundingBox())!.width).toBeGreaterThan(300);
+  await page.screenshot({ path: 'test-results/overhull-prototype-canvas.png', fullPage: true });
+  await compactEditor.getByRole('button', { name: 'Blocks', exact: true }).click();
+  await expect(page.getByLabel('Prototype blocks', { exact: true })).toBeVisible();
+  expect((await page.locator('.prototype-compact-canvas').boundingBox())!.width).toBeGreaterThan(180);
+  await expect(frame.getByRole('heading', { name: 'Welcome', exact: true })).toBeVisible();
+  await page.screenshot({ path: 'test-results/overhull-prototype-palette.png', fullPage: true });
+  await compactEditor.getByRole('button', { name: 'Outline', exact: true }).click();
+  await expect(page.getByLabel('Prototype outline', { exact: true })).toBeVisible();
+  await compactEditor.getByRole('button', { name: 'Outline', exact: true }).click();
   await frame.getByRole('heading', { name: 'Welcome', exact: true }).click();
   await page.screenshot({ path: 'test-results/overhull-prototype-editor.png', fullPage: true });
   // Editing through the real Puck field panel must update the same persisted source.
@@ -477,10 +491,15 @@ test('supports keyboard settings, dark theme, scaling and recovery after restart
   await page.screenshot({ path: 'test-results/overhull-dark-scaled.png', fullPage: true });
   await application.close();
   application = await electron.launch({
-    args: [path.resolve('out/main/index.js'), `--user-data-dir=${path.join(directory, 'app-data')}`],
+    args: [
+      path.resolve('out/main/index.js'),
+      `--user-data-dir=${path.join(directory, 'app-data')}`,
+      '--force-device-scale-factor=2',
+    ],
   });
   page = await application.firstWindow();
   page.on('pageerror', (error) => errors.push(error.message));
+  expect(await page.evaluate(() => devicePixelRatio)).toBe(2);
   await page.getByRole('button', { name: /team-project/ }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect

@@ -1,6 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Puck, Render, type Config, type Data, type Slot } from '@puckeditor/core';
-import { Braces, Eye, MousePointer2, Monitor, Tablet, Smartphone, AlertCircle } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Puck, Render, usePuck, type Config, type Data, type Slot } from '@puckeditor/core';
+import {
+  Braces,
+  Eye,
+  MousePointer2,
+  Monitor,
+  Tablet,
+  Smartphone,
+  AlertCircle,
+  Undo2,
+  Redo2,
+} from 'lucide-react';
 import { type Prototype } from '../../shared/types';
 import { validatePrototype } from '../../shared/prototypes';
 export { validatePrototype } from '../../shared/prototypes';
@@ -466,6 +476,107 @@ export function createPrototypeConfig(
   };
 }
 
+// Puck's built-in breakpoints follow the window. The editor can be much narrower
+// between the artifact outline and chat, so measure its own available space.
+function ResponsivePuckLayout({ children }: { children: ReactNode }) {
+  const container = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(true);
+  const [panel, setPanel] = useState<'blocks' | 'outline' | 'properties' | null>(null);
+  const { selectedItem, history, dispatch } = usePuck();
+  const selectedId = selectedItem?.props.id;
+
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setCompact(entry.contentRect.width < 780));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (compact && selectedId) setPanel('properties');
+  }, [compact, selectedId]);
+
+  useEffect(() => {
+    if (!compact || panel !== 'properties') return;
+    const frame = requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: 'nearest' }));
+    return () => cancelAnimationFrame(frame);
+  }, [compact, panel, selectedId]);
+
+  return (
+    <div ref={container} className="prototype-responsive-layout" data-compact={compact}>
+      {compact ? (
+        <div className="prototype-compact-layout" data-panel={panel}>
+          <div className="prototype-compact-toolbar" aria-label="Prototype editing controls">
+            {(['blocks', 'outline', 'properties'] as const).map((value) => (
+              <button
+                key={value}
+                className={`editor-button ${panel === value ? 'active' : ''}`}
+                aria-pressed={panel === value}
+                onClick={() => setPanel((previous) => (previous === value ? null : value))}
+              >
+                {value === 'blocks' ? 'Blocks' : value === 'outline' ? 'Outline' : 'Properties'}
+              </button>
+            ))}
+            <span className="editor-spacer" />
+            <button
+              className="editor-button editor-icon-button"
+              aria-label="Undo prototype change"
+              disabled={!history.hasPast}
+              onClick={() => history.back()}
+            >
+              <Undo2 size={14} />
+            </button>
+            <button
+              className="editor-button editor-icon-button"
+              aria-label="Redo prototype change"
+              disabled={!history.hasFuture}
+              onClick={() => history.forward()}
+            >
+              <Redo2 size={14} />
+            </button>
+          </div>
+          <div className="prototype-compact-canvas" aria-label="Editable prototype canvas">
+            <Puck.Preview />
+          </div>
+          {panel && (
+            <div ref={panelRef} className="prototype-compact-panel" aria-label={`Prototype ${panel}`}>
+              {panel === 'properties' && (
+                <div className="prototype-compact-panel-heading">
+                  <strong>{selectedItem?.type ?? 'Page properties'}</strong>
+                  {selectedItem && (
+                    <button
+                      className="editor-button"
+                      onClick={() => dispatch({ type: 'setUi', ui: { itemSelector: null } })}
+                    >
+                      Page
+                    </button>
+                  )}
+                  <button className="editor-button" onClick={() => setPanel(null)}>
+                    Close panel
+                  </button>
+                </div>
+              )}
+              {panel === 'blocks' ? (
+                <Puck.Components />
+              ) : panel === 'outline' ? (
+                <Puck.Outline />
+              ) : (
+                <Puck.Fields />
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        children
+      )}
+    </div>
+  );
+}
+
+const puckOverrides = { puck: ResponsivePuckLayout };
+
 export function PrototypeEditor({
   prototype,
   onChange,
@@ -625,6 +736,7 @@ export function PrototypeEditor({
           <Puck
             key={`${prototype.id}-${epoch}`}
             config={config}
+            overrides={puckOverrides}
             data={data}
             onChange={(value) => save(value as Data)}
             onPublish={(value) => save(value as Data)}

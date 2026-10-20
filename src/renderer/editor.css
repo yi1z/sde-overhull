@@ -387,6 +387,12 @@
   min-width: 0;
   min-height: 260px;
   position: relative;
+  container: diagram-canvas / inline-size;
+}
+@container diagram-canvas (max-width: 480px) {
+  .react-flow__minimap {
+    display: none;
+  }
 }
 .diagram-inspector {
   width: 220px;
@@ -581,6 +587,87 @@
 }
 .prototype-puck > div {
   min-height: 100%;
+}
+.prototype-responsive-layout {
+  height: 100%;
+  min-width: 0;
+}
+.prototype-compact-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: auto;
+  background: var(--editor-bg);
+  color: var(--editor-text);
+}
+.prototype-compact-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 8px;
+  background: var(--editor-surface);
+  border-bottom: 1px solid var(--editor-border);
+}
+.prototype-compact-toolbar .editor-button {
+  padding: 5px 7px;
+  font-size: 11px;
+}
+.prototype-compact-canvas {
+  flex: 1 0 260px;
+  min-height: 260px;
+  background: #fff;
+  color: #172033;
+}
+.prototype-compact-panel {
+  flex: 0 0 auto;
+  max-height: min(320px, calc(100% - 46px));
+  min-height: 180px;
+  overflow: auto;
+  padding: 12px;
+  border-top: 1px solid var(--editor-border);
+  background: var(--editor-surface);
+}
+.prototype-compact-panel-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.prototype-compact-panel-heading strong {
+  flex: 1;
+}
+/* Keep the drop target visible while dragging a palette block or outline item. */
+.prototype-compact-layout:is([data-panel='blocks'], [data-panel='outline']) {
+  display: grid;
+  grid-template-columns: minmax(125px, 38%) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+.prototype-compact-layout:is([data-panel='blocks'], [data-panel='outline']) .prototype-compact-toolbar {
+  grid-column: 1 / -1;
+}
+.prototype-compact-layout:is([data-panel='blocks'], [data-panel='outline']) .prototype-compact-canvas {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+  height: 100%;
+}
+.prototype-compact-layout:is([data-panel='blocks'], [data-panel='outline']) .prototype-compact-panel {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+  min-width: 0;
+  max-height: none;
+  height: 100%;
+  padding: 8px;
+  border-top: 0;
+  border-right: 1px solid var(--editor-border);
 }
 .prototype-puck {
   --puck-color-surface: var(--editor-surface);

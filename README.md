@@ -11,11 +11,11 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Open **Settings → Agent connection → Check connection**. If Codex is not found, set its executable path. Run `codex login` in a terminal if authentication is missing. Model selection uses your available Codex models; an empty selection retains the CLI default.
+Open **Settings → Agent connection → Check connection**. If a project is already open, trust it first. If Codex is not found, set its executable path. Run `codex login` in a terminal if authentication is missing. Model selection uses your available Codex models; an empty selection retains the CLI default.
 
 ## Development workflow
 
-1. **Open, create, or clone a repository.** Trust it before running its code or agent. Git uses your existing identity and credential helper.
+1. **Open, create, or clone a repository.** Trust it before running its code or agent. Git uses your existing identity and credential helper. New project creates a local repository; configure an `origin` remote separately before pushing.
 2. **Design.** Describe your idea in the agent panel. The agent updates requirements, questions, decisions, implementation tasks, executable checks, diagrams, and visual prototypes. Edit any draft artifact manually; stale agent updates are rejected. Changes save locally.
 3. **Confirm.** Ask the agent to review the latest revision. Confirmation requires requirements/tasks, required test and smoke commands, and resolved blocking questions. **Confirm & Commit** creates an immutable approved snapshot and Git approval commit. Commit unrelated source changes first.
 4. **Implement.** Start from clean source in the current checkout. Codex implements the approved design and reports task evidence. The host executes the required checks after the agent stops writing. Only passing checks, matching code, and agent confirmation produce **Agent verified**. Stop retains partial edits.
@@ -31,13 +31,13 @@ Open **Settings → Agent connection → Check connection**. If Codex is not fou
 
 ## Repository and local state
 
-Shared state lives in `.sde/`: the project manifest, individual design artifacts, revision history, approvals, messages, feedback, service configuration, and concise run evidence. Files use stable IDs, formatted JSON, and schema version 1. Do not manually edit an approved snapshot; create a new design round.
+Shared state lives in `.sde/`: the project manifest, individual design artifacts, revision history, approvals, messages, feedback, service configuration, and concise run evidence. Records use stable IDs and validated, formatted JSON; the manifest and designs declare schema version 1. Do not manually edit an approved snapshot; create a new design round.
 
 Settings, trusted roots, Codex session references, environment values, and full verification logs live in the platform's Electron `userData` directory, outside the repository. Environment values are local files protected by OS permissions, not an encrypted credential vault; prefer existing environment configuration for sensitive secrets. Do not paste secrets into shared chat. Raw process logs are not committed as run evidence.
 
 An approval references a content digest and code baseline; a run references the approval's actual commit. Verification additionally matches the source/test/lockfile/service-configuration digest. Later source changes make verification stale; messages and feedback do not. Approved design content is read from Git objects.
 
-Pull is fast-forward only. Divergence requires an explicit merge; resolve conflicts, validate/stage resolutions, then finish the merge. Overhull never silently stashes, resets, rebases, or force-pushes. Git operations are blocked while implementation owns the checkout. Avoid changing the branch from another tool during a run; Overhull pauses on detected baseline changes.
+Pull is fast-forward only. Divergence requires an explicit merge; resolve conflicts, validate/stage resolutions, then finish the merge. Overhull never silently stashes, resets the working tree, rebases, or force-pushes. Commits, pushes, pulls, and merges are blocked while implementation owns the checkout; status, diffs, and fetch remain available. Avoid changing the branch from another tool during a run; Overhull pauses on detected baseline changes.
 
 To continue interrupted work on another machine, commit the partial source and checkpoint/discussion, push, and pull in the other clone. Local process state and Codex session IDs are not portable. The new run reconstructs its context from repository evidence.
 
@@ -70,9 +70,9 @@ $env:SDE_LIVE_ACCEPTANCE='1'
 pnpm exec vitest run tests/live-acceptance.test.ts
 ```
 
-The complete acceptance test asks real Codex to design a small web application, applies manual visual changes, obtains a fresh review, commits approval, implements and verifies two services, starts them, records feedback, and creates the next round.
+The complete acceptance test asks real Codex to design a small web application, applies developer edits through the application API, obtains a fresh review, commits approval, implements and verifies two services, starts them, records feedback, and creates the next round.
 
-GitHub Actions validates Windows x64, Linux x64, and macOS x64/arm64 on native runners and produces NSIS, AppImage, and DMG artifacts. Builds are unsigned development builds; public distribution still needs your platform signing/notarization credentials. Code signing is not bypassed on users' machines.
+The GitHub Actions workflow is configured to validate Windows x64, Linux x64, and macOS x64/arm64 on native runners and produce NSIS, AppImage, and DMG artifacts. Check the workflow for the exact commit's results. Installer uploads are currently blocked by the GitHub account's artifact storage quota; source build commands remain available. Windows development installers are unsigned. macOS builds use an ad-hoc signature without a trusted Apple Developer ID or notarization. Public distribution still needs the appropriate signing/notarization credentials; the app does not bypass operating-system policy.
 
 See [installation and operations](docs/installation.md), [architecture](docs/architecture.md), and [recorded acceptance results](docs/acceptance.md) for setup, recovery, and validation details.
 
@@ -93,4 +93,4 @@ See [installation and operations](docs/installation.md), [architecture](docs/arc
 - `src/renderer`: workspace, editors, agent panel, Git controls, evaluation, and settings.
 - `tests`: domain/integration tests, real Electron interaction tests, and gated live-agent acceptance.
 
-Current scope is Codex-first, web-app-first, and Git-based collaboration. No central server, live multi-user presence, or automatic remote execution is required.
+Current scope uses Codex, prioritizes web applications, and collaborates through Git. Additional AI providers, simultaneous live editing, and automatic remote execution are not implemented. The app needs no central server.

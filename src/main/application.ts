@@ -134,9 +134,11 @@ export class Application {
   private agentGeneration = 0;
   private runMonitor?: ReturnType<typeof setInterval>;
   private monitoring = false;
+  private monitorTask?: Promise<void>;
   private projectWatcher?: FSWatcher;
   private changeTimer?: ReturnType<typeof setTimeout>;
   private requestIds = new Map<string | number, AgentEvent>();
+  private shuttingDown = false;
   constructor(
     directory: string,
     private host: Host,
@@ -179,6 +181,7 @@ export class Application {
     method: K,
     params?: RpcMap[K]['input'],
   ): Promise<RpcMap[K]['output']> {
+    if (this.shuttingDown) throw new Error('The workspace is closing.');
     // Every operation has validation here; renderer input never becomes a shell string.
     const p = params as any;
     switch (method) {
@@ -472,6 +475,8 @@ export class Application {
     if (this.busyAgent) throw new Error('Stop the agent before switching projects.');
     await this.supervisor?.stop();
     await this.disconnectAgent();
+    await this.eventQueue.catch(() => undefined);
+    await this.monitorTask?.catch(() => undefined);
     const real = await fs.realpath(root);
     const store = new ProjectStore(real);
     await store.git.status();
@@ -950,7 +955,7 @@ export class Application {
       if (this.monitoring || !this.activeRun) return;
       this.monitoring = true;
       const run = this.activeRun;
-      void this.assertRunBaseline()
+      this.monitorTask = this.assertRunBaseline()
         .catch(async (error) => {
           this.stopMonitor();
           this.pendingVerification = false;
@@ -967,6 +972,9 @@ export class Application {
         .finally(() => {
           this.monitoring = false;
         });
+      void this.monitorTask.catch((error) =>
+        this.host.event({ type: 'agent', data: { type: 'error', text: String(error) } }),
+      );
     }, 2000);
     this.runMonitor.unref();
   }
@@ -988,6 +996,7 @@ export class Application {
         await this.disconnectAgent();
       }
       await this.verificationTask?.catch(() => undefined);
+      await this.monitorTask?.catch(() => undefined);
       this.busyAgent = false;
       if (run) {
         run.status = 'cancelled';
@@ -1021,8 +1030,10 @@ export class Application {
     this.changed();
   }
   async dispose() {
+    this.shuttingDown = true;
     this.projectWatcher?.close();
     if (this.changeTimer) clearTimeout(this.changeTimer);
+    await this.mutation.catch(() => undefined);
     try {
       await this.cancelRun();
     } finally {
@@ -1030,6 +1041,8 @@ export class Application {
         await this.supervisor?.stop();
       } finally {
         await this.disconnectAgent();
+        await this.eventQueue.catch(() => undefined);
+        await this.mutation.catch(() => undefined);
       }
     }
   }

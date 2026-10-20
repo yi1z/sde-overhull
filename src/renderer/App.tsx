@@ -59,6 +59,7 @@ export function App() {
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const generation = useRef(0);
   const switching = useRef(false);
+  const closing = useRef(false);
   const report = useCallback((e: unknown) => {
     setError(String(e).replace(/^Error: (Error invoking remote method '[^']+': Error: )?/, ''));
   }, []);
@@ -86,7 +87,16 @@ export function App() {
   useEffect(() => {
     void window.sde.request('settings.get').then(setSettings).catch(report);
     return window.sde.onEvent((event: AppEvent) => {
-      if (event.type === 'project-changed') {
+      if (event.type === 'close-request') {
+        if (closing.current) return;
+        closing.current = true;
+        void save()
+          .then(() => window.sde.request('window.close'))
+          .catch((error) => {
+            closing.current = false;
+            report(error);
+          });
+      } else if (event.type === 'project-changed') {
         void refresh();
       } else if (event.type === 'agent') {
         const item = event.data as AgentEvent;
@@ -122,24 +132,6 @@ export function App() {
     },
     [],
   );
-  useEffect(() => {
-    let closing = false;
-    const flushBeforeClose = (event: BeforeUnloadEvent) => {
-      if (!dirty.current) return;
-      event.preventDefault();
-      event.returnValue = false;
-      if (closing) return;
-      closing = true;
-      void save()
-        .then(() => window.close())
-        .catch(report)
-        .finally(() => {
-          closing = false;
-        });
-    };
-    window.addEventListener('beforeunload', flushBeforeClose);
-    return () => window.removeEventListener('beforeunload', flushBeforeClose);
-  }, [report]);
   async function action<T>(fn: () => Promise<T>): Promise<T> {
     setBusy(true);
     setError('');

@@ -10,6 +10,8 @@ import type { VerificationOptions, VerificationReport } from '../src/main/verifi
 import { saveRunLog } from '../src/main/run-logs';
 import { Preferences } from '../src/main/preferences';
 
+const readinessTimeout = process.env.CI ? 30000 : 10000;
+
 // Only the external agent transport and host check runner are simulated. Repository,
 // approvals, application gates, persisted run evidence, and local preferences are real.
 const doubles = vi.hoisted(() => ({
@@ -129,7 +131,7 @@ afterEach(async () => {
     path.dirname(directory) === os.tmpdir() &&
     path.basename(directory).startsWith('overhull-application-test-')
   )
-    await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 async function reportReady(
@@ -148,12 +150,15 @@ describe('application implementation boundaries', () => {
     'holds the checkout through verification cancellation cleanup (interrupt failure: %s)',
     async (interruptFailure) => {
       let release!: () => void;
+      // Create the cleanup handle before any slow Git operation. A timed-out
+      // readiness assertion must still release verification if it starts later.
+      const verificationRelease = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       let verificationSignal: AbortSignal | undefined;
       doubles.verify.mockImplementation(async (checks, options) => {
         verificationSignal = options.signal;
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
+        await verificationRelease;
         return passingReport(checks, options);
       });
       const other = new Application(path.join(directory, 'cancellation-profile'), {
@@ -168,7 +173,9 @@ describe('application implementation boundaries', () => {
         await other.request('project.trust');
         await app.request('run.start');
         await reportReady();
-        await vi.waitFor(() => expect(doubles.verify).toHaveBeenCalledTimes(1), { timeout: 10000 });
+        await vi.waitFor(() => expect(doubles.verify).toHaveBeenCalledTimes(1), {
+          timeout: readinessTimeout,
+        });
         if (interruptFailure)
           doubles.interrupt.mockRejectedValueOnce(
             new Error('Agent transport disconnected during interruption'),
@@ -184,7 +191,7 @@ describe('application implementation boundaries', () => {
             return error;
           },
         );
-        await vi.waitFor(() => expect(verificationSignal?.aborted).toBe(true));
+        await vi.waitFor(() => expect(verificationSignal?.aborted).toBe(true), { timeout: readinessTimeout });
         await new Promise((resolve) => setTimeout(resolve, 50));
         expect(finished).toBe(false);
         await expect(other.request('run.start')).rejects.toThrow('owns this checkout');
@@ -283,7 +290,7 @@ describe('application implementation boundaries', () => {
             (message) => message.role === 'assistant' && message.text.includes('Which runtime?'),
           ),
         ).toBe(true),
-      { timeout: 10000 },
+      { timeout: readinessTimeout },
     );
     const response = {
       answers: { stack: { answers: ['Node.js'] }, key: { answers: ['never-share-this-secret'] } },
@@ -336,36 +343,37 @@ describe('application implementation boundaries', () => {
       async () => {
         expect((await app.request('project.refresh')).runs[0].status).toBe('blocked');
       },
-      { timeout: 10000 },
+      { timeout: readinessTimeout },
     );
     expect(doubles.verify).not.toHaveBeenCalled();
   });
 
   it('prevents another mutable agent turn while host verification is running', async () => {
     let release!: () => void;
+    const verificationRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     doubles.verify.mockImplementation(async (checks, options) => {
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      await verificationRelease;
       return passingReport(checks, options);
     });
-    await app.request('run.start');
-    await reportReady();
-    await vi.waitFor(() => expect(doubles.verify).toHaveBeenCalledTimes(1), { timeout: 10000 });
     try {
+      await app.request('run.start');
+      await reportReady();
+      await vi.waitFor(() => expect(doubles.verify).toHaveBeenCalledTimes(1), { timeout: readinessTimeout });
       await expect(
         app.request('agent.send', { text: 'Change the implementation', phase: 'implement' }),
       ).rejects.toThrow(/verif/i);
     } finally {
       release();
     }
-    await vi.waitFor(() => expect(doubles.send).toHaveBeenCalledTimes(2), { timeout: 10000 });
+    await vi.waitFor(() => expect(doubles.send).toHaveBeenCalledTimes(2), { timeout: readinessTimeout });
   });
 
   it('requires unchanged code when accepting the agent’s final verification confirmation', async () => {
     await app.request('run.start');
     await reportReady();
-    await vi.waitFor(() => expect(doubles.send).toHaveBeenCalledTimes(2), { timeout: 10000 });
+    await vi.waitFor(() => expect(doubles.send).toHaveBeenCalledTimes(2), { timeout: readinessTimeout });
     const view = await app.request('project.refresh');
     const digest = view.runs[0].outputCodeDigest;
     await fs.writeFile(path.join(root, 'index.js'), 'export const value = 2;\n');

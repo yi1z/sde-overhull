@@ -10,6 +10,7 @@ if (userDataArgument)
 let window: BrowserWindow | undefined;
 let application: Application | undefined;
 let exiting = false;
+let closeApproved = smokeTest;
 const single = app.requestSingleInstanceLock();
 if (!single) app.quit();
 else {
@@ -52,6 +53,12 @@ else {
         },
       });
       window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      window.on('close', (event) => {
+        if (!closeApproved) {
+          event.preventDefault();
+          window?.webContents.send('sde:event', { type: 'close-request' });
+        }
+      });
       window.webContents.on('will-navigate', (event) => event.preventDefault());
       window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
         callback(false),
@@ -59,6 +66,12 @@ else {
       ipcMain.handle('sde:request', async (event, method, params) => {
         if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame)
           throw new Error('Untrusted application frame.');
+        if (method === 'window.close') {
+          if (params !== undefined) throw new Error('Window close takes no parameters.');
+          closeApproved = true;
+          window.close();
+          return;
+        }
         return application!.request(method, params);
       });
       window.once('ready-to-show', () => {
@@ -92,6 +105,10 @@ else {
   app.on('before-quit', (event) => {
     if (exiting) return;
     event.preventDefault();
+    if (!closeApproved && window && !window.isDestroyed()) {
+      window.webContents.send('sde:event', { type: 'close-request' });
+      return;
+    }
     exiting = true;
     void Promise.resolve(application?.dispose()).finally(() => app.quit());
   });

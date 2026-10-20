@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { AppEvent, DesktopAPI } from '../shared/types';
 const methods = new Set([
+  'window.close',
   'settings.get',
   'settings.save',
   'project.open',

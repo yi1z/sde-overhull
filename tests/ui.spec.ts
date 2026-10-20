@@ -14,6 +14,63 @@ let repository: string;
 let store: ProjectStore;
 const errors: string[] = [];
 
+async function focusApplication() {
+  await application.evaluate(({ app, BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (window.isMinimized()) window.restore();
+    window.show();
+    if (process.platform === 'darwin') app.focus({ steal: true });
+    window.focus();
+    window.webContents.focus();
+  });
+  await page.bringToFront();
+  await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
+}
+
+async function waitForCanvasLayout() {
+  let previous = '';
+  let stableSamples = 0;
+  await expect
+    .poll(
+      async () => {
+        const layout = await page.evaluate(() => {
+          const canvas = document.querySelector('.diagram-canvas');
+          const viewport = document.querySelector('.react-flow__viewport');
+          const actor = document.querySelector('.react-flow__node[data-id="user"] .sde-flow-node-header');
+          if (!canvas || !viewport || !actor) return null;
+          const bounds = canvas.getBoundingClientRect();
+          const node = actor.getBoundingClientRect();
+          const center = { x: node.x + node.width / 2, y: node.y + node.height / 2 };
+          return {
+            transform: getComputedStyle(viewport).transform,
+            canvas: [bounds.x, bounds.y, bounds.width, bounds.height],
+            actor: [node.x, node.y, node.width, node.height],
+            ready:
+              node.width > 0 &&
+              node.height > 0 &&
+              center.x > bounds.left &&
+              center.x < bounds.right &&
+              center.y > bounds.top &&
+              center.y < bounds.bottom,
+          };
+        });
+        const current = JSON.stringify(layout);
+        stableSamples = layout?.ready && current === previous ? stableSamples + 1 : 0;
+        previous = current;
+        return stableSamples;
+      },
+      {
+        message: 'React Flow node measurements and fitView must settle before pointer input',
+        intervals: [100],
+        timeout: 10000,
+      },
+    )
+    .toBeGreaterThanOrEqual(3);
+}
+
+const animationFrame = () =>
+  page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+
 function flow(kind: Diagram['kind'], title: string): Diagram {
   return {
     id: `diagram-${kind}`,
@@ -192,6 +249,47 @@ test.afterAll(async () => {
   if (directory) await fs.rm(directory, { recursive: true, force: true });
 });
 
+test.afterEach(async ({}, info) => {
+  if (info.status === info.expectedStatus || !page || page.isClosed()) return;
+  const renderer = await page
+    .evaluate(() => {
+      const node = document.querySelector('.react-flow__node[data-id="user"]');
+      const header = node?.querySelector('.sde-flow-node-header');
+      const box = header?.getBoundingClientRect();
+      return {
+        focused: document.hasFocus(),
+        visibility: document.visibilityState,
+        viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+        canvas: document.querySelector('.diagram-canvas')?.getBoundingClientRect().toJSON(),
+        transform: document.querySelector('.react-flow__viewport')?.getAttribute('style'),
+        actor: { bounds: box?.toJSON(), style: node?.getAttribute('style'), class: node?.className },
+        hit: box
+          ? document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.outerHTML.slice(0, 500)
+          : null,
+        alerts: [...document.querySelectorAll('[role="alert"]')].map((element) => element.textContent),
+        save: document.querySelector('.save-status')?.textContent,
+        inputEvents: (window as any).__overhullDragTrace,
+      };
+    })
+    .catch((error) => ({ error: String(error) }));
+  const native = await application
+    .evaluate(({ BrowserWindow, screen }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return {
+        bounds: window?.getBounds(),
+        content: window?.getContentBounds(),
+        focused: window?.isFocused(),
+        display: screen.getPrimaryDisplay().workArea,
+        scale: screen.getPrimaryDisplay().scaleFactor,
+      };
+    })
+    .catch((error) => ({ error: String(error) }));
+  console.log(
+    'ELECTRON_UI_DIAGNOSTICS',
+    JSON.stringify({ platform: process.platform, native, renderer, errors }),
+  );
+});
+
 test('opens a real repository and shows the design workflow', async () => {
   await expect(page.getByRole('heading', { name: /Build a common understanding/ })).toBeVisible();
   await page.screenshot({ path: 'test-results/overhull-welcome.png', fullPage: true });
@@ -210,15 +308,45 @@ test('opens a real repository and shows the design workflow', async () => {
 });
 
 test('edits a diagram with actual dragging, connections, grouping and persisted JSON', async () => {
+  await focusApplication();
   await page.getByRole('button', { name: 'How the team works', exact: true }).click();
   const actor = page.locator('.react-flow__node[data-id="user"] .sde-flow-node-header');
   await expect(actor).toBeVisible();
+  await waitForCanvasLayout();
+  await actor.click({ trial: true });
+  await page.evaluate(() => {
+    const trace: unknown[] = [];
+    (window as any).__overhullDragTrace = trace;
+    for (const type of ['mousedown', 'mousemove', 'mouseup'])
+      document.addEventListener(
+        type,
+        (event) => {
+          const mouse = event as MouseEvent;
+          trace.push({
+            type,
+            x: mouse.clientX,
+            y: mouse.clientY,
+            button: mouse.button,
+            buttons: mouse.buttons,
+            node: (mouse.target as Element)?.closest?.('.react-flow__node')?.getAttribute('data-id'),
+          });
+          if (trace.length > 40) trace.shift();
+        },
+        { capture: true },
+      );
+  });
   const before = (await store.load()).design.diagrams[0].nodes.find((node) => node.id === 'user')!.position;
   const box = await actor.boundingBox();
   if (!box) throw new Error('Actor has no layout box.');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 50, { steps: 12 });
+  // Give the native mouse-down and each drag segment a frame to reach React Flow.
+  // Sending all moves in one frame can race its initial fitView on a fast macOS runner.
+  await animationFrame();
+  for (let step = 1; step <= 12; step++) {
+    await page.mouse.move(box.x + box.width / 2 + step * 5, box.y + box.height / 2 + step * 4);
+    await animationFrame();
+  }
   await page.mouse.up();
   await expect
     .poll(
@@ -249,6 +377,7 @@ test('edits a diagram with actual dragging, connections, grouping and persisted 
     .toBe('backend');
   await page.getByRole('button', { name: 'Arrange', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Arrange', exact: true })).toBeEnabled();
+  await waitForCanvasLayout();
   const sourceHandle = page.locator('.react-flow__node[data-id="user"] .react-flow__handle.source');
   const targetHandle = page.locator('.react-flow__node[data-id="projects"] .react-flow__handle.target');
   await sourceHandle.dragTo(targetHandle);

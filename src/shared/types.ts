@@ -302,7 +302,7 @@ export type AgentEvent = {
   data?: unknown;
 };
 export type AppEvent = {
-  type: 'project-changed' | 'agent' | 'service-log' | 'services' | 'verification-log';
+  type: 'project-changed' | 'close-request' | 'agent' | 'service-log' | 'services' | 'verification-log';
   data?: unknown;
 };
 export type AgentDiagnostics = {
@@ -314,6 +314,7 @@ export type AgentDiagnostics = {
   error?: string;
 };
 export type RpcMap = {
+  'window.close': { input: undefined; output: void };
   'settings.get': { input: void; output: Settings };
   'settings.save': { input: Partial<Settings>; output: Settings };
   'project.open': { input: { path?: string }; output: ProjectView | null };

@@ -2,6 +2,7 @@ name: Desktop validation
 on:
   push:
     branches: [main, 'main-*']
+    paths-ignore: ['docs/**', 'README.md']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -77,6 +78,10 @@ jobs:
         if: steps.installer.outcome == 'failure'
         shell: bash
         run: echo 'Native build and smoke checks passed, but installer upload failed. Check the artifact step for account quota or network errors. Reproduce the installer with the documented native build command.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Print UI failure context
+        if: failure()
+        shell: bash
+        run: find test-results -name error-context.md -exec cat '{}' \; 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: failure()
         continue-on-error: true

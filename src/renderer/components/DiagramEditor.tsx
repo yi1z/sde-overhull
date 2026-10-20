@@ -196,7 +196,6 @@ function DiagramCanvas({ diagram, onChange, onSelection, readOnly = false }: Pro
   const [history, setHistory] = useState<Diagram[]>([]);
   const [future, setFuture] = useState<Diagram[]>([]);
   const current = useRef(diagram);
-  const lastEmitted = useRef('');
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const { fitView, screenToFlowPosition } = useReactFlow();
@@ -208,17 +207,31 @@ function DiagramCanvas({ diagram, onChange, onSelection, readOnly = false }: Pro
   }, [readOnly]);
 
   useEffect(() => {
-    const serialized = JSON.stringify(diagram);
     // A saved echo should update the revision, without throwing away transient selection.
-    const content = (d: Diagram) => JSON.stringify({ ...d, revision: 0 });
+    // Schema normalization also ignores JSON key ordering and omitted default values.
+    const content = (d: Diagram) => JSON.stringify(DiagramSchema.parse({ ...d, revision: 0 }));
     const isEcho = content(diagram) === content(current.current);
     current.current = diagram;
-    if (!isEcho && serialized !== lastEmitted.current) {
-      setNodes(flowNodes(diagram, readOnly));
-      setEdges(flowEdges(diagram));
+    if (!isEcho) {
+      setNodes((previous) =>
+        flowNodes(diagram, readOnly).map((node) => ({
+          ...node,
+          selected: previous.find((old) => old.id === node.id)?.selected,
+        })),
+      );
+      setEdges((previous) =>
+        flowEdges(diagram).map((edge) => ({
+          ...edge,
+          selected: previous.find((old) => old.id === edge.id)?.selected,
+        })),
+      );
       setHistory([]);
       setFuture([]);
-      setSelected(undefined);
+      setSelected((previous) => {
+        if (!previous) return previous;
+        const items = previous.kind === 'node' ? diagram.nodes : diagram.edges;
+        return items.some((item) => item.id === previous.id) ? previous : undefined;
+      });
     }
   }, [diagram]);
 
@@ -233,7 +246,6 @@ function DiagramCanvas({ diagram, onChange, onSelection, readOnly = false }: Pro
           setFuture([]);
         }
         current.current = validated;
-        lastEmitted.current = JSON.stringify(validated);
         setNodes((previous) =>
           flowNodes(validated, readOnly).map((node) => ({
             ...node,

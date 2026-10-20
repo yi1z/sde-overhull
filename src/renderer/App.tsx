@@ -58,6 +58,7 @@ export function App() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const generation = useRef(0);
+  const refreshRequest = useRef(0);
   const switching = useRef(false);
   const closing = useRef(false);
   const report = useCallback((e: unknown) => {
@@ -76,9 +77,24 @@ export function App() {
     if (!projectRef.current || switching.current) return;
     const currentGeneration = generation.current;
     const root = projectRef.current.root;
+    const request = ++refreshRequest.current;
+    const startingDraft = draftRef.current;
+    const startingSequence = sequence.current;
+    const startedDirty = dirty.current;
     try {
       const view = await window.sde.request('project.refresh');
-      if (!switching.current && generation.current === currentGeneration && projectRef.current?.root === root)
+      // A read begun before a manual edit/save can finish afterwards. It must
+      // never replace that newer draft or reset the editor's current selection.
+      if (
+        !switching.current &&
+        generation.current === currentGeneration &&
+        projectRef.current?.root === root &&
+        request === refreshRequest.current &&
+        !startedDirty &&
+        !dirty.current &&
+        sequence.current === startingSequence &&
+        draftRef.current === startingDraft
+      )
         accept(view);
     } catch (e) {
       report(e);

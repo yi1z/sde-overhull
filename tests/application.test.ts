@@ -230,7 +230,7 @@ describe('application implementation boundaries', () => {
     const view = await app.request('project.refresh');
     const preferences = new Preferences(path.join(directory, 'preferences'));
     const key = `${view.design.roundId}:evaluate`;
-    await preferences.setSession(root, key, 'removed-local-session');
+    await preferences.setSession(view.root, key, 'removed-local-session');
     doubles.startThread
       .mockRejectedValueOnce(new Error('Thread not found: removed-local-session'))
       .mockResolvedValueOnce('fresh-local-session');
@@ -239,10 +239,10 @@ describe('application implementation boundaries', () => {
     expect(doubles.startThread.mock.calls[0][0]).toMatchObject({
       threadId: 'removed-local-session',
       phase: 'evaluate',
-      cwd: root,
+      cwd: view.root,
     });
     expect(doubles.startThread.mock.calls[1][0]).not.toHaveProperty('threadId');
-    expect(await preferences.session(root, key)).toBe('fresh-local-session');
+    expect(await preferences.session(view.root, key)).toBe('fresh-local-session');
     expect(doubles.send).toHaveBeenCalledTimes(1);
     expect((await app.request('project.refresh')).approvals).toHaveLength(1);
   });
@@ -250,12 +250,16 @@ describe('application implementation boundaries', () => {
   it('does not conceal authentication or provider failures behind fresh-session retries', async () => {
     const view = await app.request('project.refresh');
     const preferences = new Preferences(path.join(directory, 'preferences'));
-    await preferences.setSession(root, `${view.design.roundId}:evaluate`, 'existing-session');
+    await preferences.setSession(view.root, `${view.design.roundId}:evaluate`, 'existing-session');
     doubles.startThread.mockRejectedValueOnce(new Error('Authentication expired'));
     await expect(
       app.request('agent.send', { text: 'Explain the design.', phase: 'evaluate' }),
     ).rejects.toThrow('Authentication expired');
     expect(doubles.startThread).toHaveBeenCalledTimes(1);
+    expect(doubles.startThread.mock.calls[0][0]).toMatchObject({
+      threadId: 'existing-session',
+      cwd: view.root,
+    });
     expect(doubles.send).not.toHaveBeenCalled();
   });
 

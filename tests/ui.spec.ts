@@ -365,3 +365,56 @@ test('supports keyboard settings, dark theme, scaling and recovery after restart
   await expect(page.getByText('Ready to build', { exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test('flushes a debounced manual edit when the native window closes immediately', async () => {
+  await page.getByRole('button', { name: 'Brief & requirements', exact: true }).click();
+  const title = 'The final edit before closing the window';
+  await page.getByRole('textbox', { name: 'Design title', exact: true }).fill(title);
+  // Do not wait for the autosave debounce: close the actual BrowserWindow now.
+  const closed = application.waitForEvent('close', { timeout: 15000 });
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+  await closed;
+  expect((await store.load()).design.title).toBe(title);
+  application = await electron.launch({
+    args: [path.resolve('out/main/index.js'), `--user-data-dir=${path.join(directory, 'app-data')}`],
+  });
+  page = await application.firstWindow();
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.getByRole('button', { name: /team-project/ }).click();
+  await expect(page.getByRole('textbox', { name: 'Design title', exact: true })).toHaveValue(title);
+  expect(errors).toEqual([]);
+});
+
+test('flushes pending edits before switching repositories and keeps project responses separate', async () => {
+  const otherRepository = path.join(directory, 'other-project');
+  await fs.mkdir(otherRepository);
+  const git = (args: string[]) => execFileSync('git', args, { cwd: otherRepository, windowsHide: true });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'UI Test']);
+  git(['config', 'user.email', 'ui@example.test']);
+  await fs.writeFile(path.join(otherRepository, 'README.md'), '# Another project\n');
+  git(['add', 'README.md']);
+  git(['commit', '-m', 'Initialize second UI fixture']);
+  const otherStore = new ProjectStore(otherRepository);
+  const otherInitial = await otherStore.initialize('Other project');
+  // Replace only the OS picker; the renderer action, IPC, Git, and persistence stay real.
+  await application.evaluate(({ dialog }, root) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] });
+  }, otherRepository);
+  const title = 'Saved while switching to another repository';
+  await page.getByRole('textbox', { name: 'Design title', exact: true }).fill(title);
+  await page.getByRole('button', { name: 'Team project', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Other project', exact: true })).toBeVisible();
+  expect((await store.load()).design.title).toBe(title);
+  await expect(page.getByRole('textbox', { name: 'Design title', exact: true })).toHaveValue(
+    otherInitial.design.title,
+  );
+  expect((await otherStore.load()).design.title).toBe(otherInitial.design.title);
+  await application.evaluate(({ dialog }, root) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] });
+  }, repository);
+  await page.getByRole('button', { name: 'Other project', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Team project', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Design title', exact: true })).toHaveValue(title);
+  expect(errors).toEqual([]);
+});

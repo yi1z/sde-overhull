@@ -49,6 +49,7 @@ pnpm test
 pnpm build
 pnpm test:e2e
 pnpm package:dir
+pnpm test:package
 pnpm package
 ```
 
@@ -72,6 +73,8 @@ pnpm exec vitest run tests/live-acceptance.test.ts
 The complete acceptance test asks real Codex to design a small web application, applies manual visual changes, obtains a fresh review, commits approval, implements and verifies two services, starts them, records feedback, and creates the next round.
 
 GitHub Actions validates Windows x64, Linux x64, and macOS x64/arm64 on native runners and produces NSIS, AppImage, and DMG artifacts. Builds are unsigned development builds; public distribution still needs your platform signing/notarization credentials. Code signing is not bypassed on users' machines.
+
+See [installation and operations](docs/installation.md), [architecture](docs/architecture.md), and [recorded acceptance results](docs/acceptance.md) for setup, recovery, and validation details.
 
 ## Troubleshooting
 

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "An agent-centered workspace for collaborative software development",
   "author": "Overhull contributors",
+  "desktopName": "dev.overhull.desktop",
   "main": "out/main/index.js",
   "private": true,
   "type": "module",
@@ -97,6 +98,7 @@
     },
     "linux": {
       "icon": "build/icon.png",
+      "syncDesktopName": true,
       "target": [
         {
           "target": "AppImage",

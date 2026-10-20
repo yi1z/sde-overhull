@@ -54,11 +54,17 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Smoke-test native package (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run -a pnpm test:package
+        run: |
+          sudo chown root:root release/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 release/linux-unpacked/chrome-sandbox
+          xvfb-run -a pnpm test:package
       - name: Smoke-test native package
         if: runner.os != 'Linux'
         run: pnpm test:package
-      - uses: actions/upload-artifact@v4
+      - name: Upload native installer
+        id: installer
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: overhull-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
@@ -66,10 +72,17 @@ jobs:
             release/*.dmg
             release/*.AppImage
           if-no-files-found: error
+          retention-days: 7
+      - name: Report unavailable installer upload
+        if: steps.installer.outcome == 'failure'
+        shell: bash
+        run: echo 'Native build and smoke checks passed, but installer upload failed. Check the artifact step for account quota or network errors. Reproduce the installer with the documented native build command.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: failure()
+        continue-on-error: true
         with:
           name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             test-results/
             playwright-report/
+          retention-days: 7

@@ -7,7 +7,14 @@ import { atomicWrite, projectPath } from './files';
 import type { GitFile, GitStatus, GitConflict } from '../shared/types';
 
 export class GitError extends Error {
-  constructor(message: string, public exitCode: number, public args: string[]) { super(message); this.name = 'GitError'; }
+  constructor(
+    message: string,
+    public exitCode: number,
+    public args: string[],
+  ) {
+    super(message);
+    this.name = 'GitError';
+  }
 }
 
 const mutations = new Map<string, Promise<unknown>>();
@@ -16,27 +23,67 @@ const mutations = new Map<string, Promise<unknown>>();
 export class GitService {
   private busy = false;
   constructor(public readonly root: string) {}
-  setBusy(busy: boolean): void { this.busy = busy; }
+  setBusy(busy: boolean): void {
+    this.busy = busy;
+  }
 
-  async run(args: string[], options: { env?: NodeJS.ProcessEnv; allowFailure?: boolean; input?: string } = {}): Promise<string> {
+  async run(
+    args: string[],
+    options: { env?: NodeJS.ProcessEnv; allowFailure?: boolean; input?: string } = {},
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
+      const env = { ...process.env };
+      // A desktop launched from another Git process must still operate on the
+      // selected checkout. Retain credentials/config, but discard repository
+      // and index overrides inherited from a terminal or Git hook.
+      const overrides = new Set([
+        'GIT_DIR',
+        'GIT_COMMON_DIR',
+        'GIT_WORK_TREE',
+        'GIT_INDEX_FILE',
+        'GIT_OBJECT_DIRECTORY',
+        'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+        'GIT_NAMESPACE',
+        'GIT_PREFIX',
+        'GIT_CEILING_DIRECTORIES',
+        'GIT_GLOB_PATHSPECS',
+        'GIT_NOGLOB_PATHSPECS',
+        'GIT_ICASE_PATHSPECS',
+      ]);
+      for (const name of Object.keys(env)) if (overrides.has(name.toUpperCase())) delete env[name];
       const child = spawn('git', args, {
-        cwd: this.root, windowsHide: true, shell: false,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...options.env },
+        cwd: this.root,
+        windowsHide: true,
+        shell: false,
+        env: { ...env, ...options.env, GIT_TERMINAL_PROMPT: '0', GIT_LITERAL_PATHSPECS: '1' },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      const stdout: Buffer[] = []; const stderr: Buffer[] = []; let length = 0;
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let length = 0;
       const collect = (target: Buffer[]) => (data: Buffer) => {
         length += data.length;
-        if (length > 32 * 1024 * 1024) { child.kill(); reject(new Error('Git output exceeded 32 MB; narrow the requested diff.')); return; }
+        if (length > 32 * 1024 * 1024) {
+          child.kill();
+          reject(new Error('Git output exceeded 32 MB; narrow the requested diff.'));
+          return;
+        }
         target.push(data);
       };
-      child.stdout.on('data', collect(stdout)); child.stderr.on('data', collect(stderr));
+      child.stdout.on('data', collect(stdout));
+      child.stderr.on('data', collect(stderr));
       child.once('error', reject);
       child.once('close', (code) => {
         const output = Buffer.concat(stdout).toString('utf8');
         if (code === 0 || options.allowFailure) resolve(output);
-        else reject(new GitError(Buffer.concat(stderr).toString('utf8').trim() || `Git exited with status ${code}.`, code ?? -1, args));
+        else
+          reject(
+            new GitError(
+              Buffer.concat(stderr).toString('utf8').trim() || `Git exited with status ${code}.`,
+              code ?? -1,
+              args,
+            ),
+          );
       });
       child.stdin.end(options.input);
     });
@@ -45,40 +92,71 @@ export class GitService {
   private async mutate<T>(operation: () => Promise<T>): Promise<T> {
     if (this.busy) throw new Error('Git changes are disabled while implementation is running.');
     const prior = mutations.get(this.root) ?? Promise.resolve();
-    const current = prior.catch(() => undefined).then(() => {
-      if (this.busy) throw new Error('Git changes are disabled while implementation is running.');
-      return operation();
-    });
+    const current = prior
+      .catch(() => undefined)
+      .then(() => {
+        if (this.busy) throw new Error('Git changes are disabled while implementation is running.');
+        return operation();
+      });
     mutations.set(this.root, current);
-    try { return await current; } finally { if (mutations.get(this.root) === current) mutations.delete(this.root); }
+    try {
+      return await current;
+    } finally {
+      if (mutations.get(this.root) === current) mutations.delete(this.root);
+    }
   }
 
-  async head(): Promise<string> { return (await this.run(['rev-parse', '--verify', 'HEAD'], { allowFailure: true })).trim(); }
+  async head(): Promise<string> {
+    return (await this.run(['rev-parse', '--verify', 'HEAD'], { allowFailure: true })).trim();
+  }
   async identity(): Promise<{ name: string; email: string }> {
     const [name, email] = await Promise.all([
-      this.run(['config', 'user.name'], { allowFailure: true }), this.run(['config', 'user.email'], { allowFailure: true }),
+      this.run(['config', 'user.name'], { allowFailure: true }),
+      this.run(['config', 'user.email'], { allowFailure: true }),
     ]);
-    if (!name.trim() || !email.trim()) throw new Error('Set your Git user.name and user.email before committing designs.');
+    if (!name.trim() || !email.trim())
+      throw new Error('Set your Git user.name and user.email before committing designs.');
     return { name: name.trim(), email: email.trim() };
   }
 
   async status(): Promise<GitStatus & { upstream?: string }> {
     const [raw, branch, head, upstream, remote] = await Promise.all([
       this.run(['status', '--porcelain=v1', '-z', '--untracked-files=all']),
-      this.run(['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true }), this.head(),
+      this.run(['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true }),
+      this.head(),
       this.run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { allowFailure: true }),
       this.run(['remote', 'get-url', 'origin'], { allowFailure: true }),
     ]);
-    const chunks = raw.split('\0'); const files: GitFile[] = [];
+    const chunks = raw.split('\0');
+    const files: GitFile[] = [];
     for (let index = 0; index < chunks.length; index++) {
-      const entry = chunks[index]; if (!entry) continue;
-      files.push({ path: entry.slice(3), index: entry[0], worktree: entry[1], conflicted: ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(entry.slice(0, 2)) });
+      const entry = chunks[index];
+      if (!entry) continue;
+      files.push({
+        path: entry.slice(3),
+        originalPath: entry.slice(0, 2).includes('R') ? chunks[index + 1] : undefined,
+        index: entry[0],
+        worktree: entry[1],
+        conflicted: ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(entry.slice(0, 2)),
+      });
       if ('RC'.includes(entry[0]) || 'RC'.includes(entry[1])) index++;
     }
     const upstreamName = upstream.trim() && !upstream.includes('@{upstream}') ? upstream.trim() : undefined;
-    const counts = upstreamName && head ? (await this.run(['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'])).trim().split(/\s+/).map(Number) : [0, 0];
-    return { branch: branch.trim() || '(detached)', head, upstream: upstreamName, remote: remote.trim() || undefined,
-      ahead: counts[0] || 0, behind: counts[1] || 0, files,
+    const counts =
+      upstreamName && head
+        ? (await this.run(['rev-list', '--left-right', '--count', 'HEAD...@{upstream}']))
+            .trim()
+            .split(/\s+/)
+            .map(Number)
+        : [0, 0];
+    return {
+      branch: branch.trim() || '(detached)',
+      head,
+      upstream: upstreamName,
+      remote: remote.trim() || undefined,
+      ahead: counts[0] || 0,
+      behind: counts[1] || 0,
+      files,
       conflicts: files.filter((change) => change.conflicted).map((change) => change.path),
     };
   }
@@ -91,7 +169,14 @@ export class GitService {
   async diff(relative?: string, staged = false): Promise<string> {
     if (relative) await projectPath(this.root, relative);
     const head = await this.head();
-    const args = ['diff', '--no-ext-diff', '--no-color', ...(staged || !head ? ['--cached'] : ['HEAD']), '--', ...(relative ? [relative] : [])];
+    const args = [
+      'diff',
+      '--no-ext-diff',
+      '--no-color',
+      ...(staged || !head ? ['--cached'] : ['HEAD']),
+      '--',
+      ...(relative ? [relative] : []),
+    ];
     const diff = await this.run(args);
     if (diff || !relative || staged) return diff;
     const status = await this.status();
@@ -108,9 +193,27 @@ export class GitService {
     return this.mutate(async () => {
       if (!message.trim()) throw new Error('A commit message is required.');
       if (!paths.length) throw new Error('Select files to commit.');
-      await this.assertNoConflicts(); await this.identity();
-      if (await this.isMergeInProgress()) throw new Error('A merge is in progress. Finish the merge to commit all resolved and automatically merged files together.');
-      const selected = [...new Set(paths)];
+      await this.assertNoConflicts();
+      await this.identity();
+      if (await this.isMergeInProgress())
+        throw new Error(
+          'A merge is in progress. Finish the merge to commit all resolved and automatically merged files together.',
+        );
+      const selected = [...new Set(paths.map((relative) => relative.replace(/\\/g, '/')))];
+      // A selected rename is one change: stage its deletion as well as its
+      // destination, even when only the destination is visible in the UI.
+      for (const file of (await this.status()).files)
+        if (
+          file.originalPath &&
+          selected.some(
+            (relative) =>
+              relative === '.' ||
+              relative === file.path ||
+              file.path.startsWith(`${relative.replace(/\/$/, '')}/`),
+          )
+        ) {
+          if (!selected.includes(file.originalPath)) selected.push(file.originalPath);
+        }
       for (const relative of selected) await projectPath(this.root, relative);
       const temporaryIndex = path.join(os.tmpdir(), `sde-index-${randomUUID()}`);
       const env = { GIT_INDEX_FILE: temporaryIndex };
@@ -131,7 +234,11 @@ export class GitService {
     });
   }
 
-  async fetch(): Promise<void> { await this.mutate(async () => { await this.run(['fetch', '--prune', 'origin']); }); }
+  async fetch(): Promise<void> {
+    await this.mutate(async () => {
+      await this.run(['fetch', '--prune', 'origin']);
+    });
+  }
   async push(): Promise<void> {
     await this.mutate(async () => {
       const status = await this.status();
@@ -144,9 +251,12 @@ export class GitService {
     await this.mutate(async () => {
       await this.assertNoConflicts();
       if ((await this.status()).files.length) throw new Error('Commit your local changes before pulling.');
-      try { await this.run(['pull', '--ff-only']); } catch (error) {
+      try {
+        await this.run(['pull', '--ff-only']);
+      } catch (error) {
         const message = (error as Error).message;
-        if (/fast-forward|diverg/i.test(message)) throw new Error('Branches have diverged. Fetch and use Merge to resolve the changes explicitly.');
+        if (/fast-forward|diverg/i.test(message))
+          throw new Error('Branches have diverged. Fetch and use Merge to resolve the changes explicitly.');
         throw error;
       }
     });
@@ -159,13 +269,18 @@ export class GitService {
       await this.run(['merge', '--no-edit', ref]);
     });
   }
-  async abortMerge(): Promise<void> { await this.mutate(async () => { await this.run(['merge', '--abort']); }); }
+  async abortMerge(): Promise<void> {
+    await this.mutate(async () => {
+      await this.run(['merge', '--abort']);
+    });
+  }
   async finishMerge(message = 'Merge synchronized project changes'): Promise<string> {
     return this.mutate(async () => {
       await this.assertNoConflicts();
       const mergeHead = await this.run(['rev-parse', '--verify', 'MERGE_HEAD'], { allowFailure: true });
       if (!mergeHead.trim()) throw new Error('No merge is in progress.');
-      await this.run(['commit', '-m', message]); return this.head();
+      await this.run(['commit', '-m', message]);
+      return this.head();
     });
   }
   async isMergeInProgress(): Promise<boolean> {
@@ -173,9 +288,14 @@ export class GitService {
   }
   async conflict(relative: string): Promise<GitConflict> {
     const file = await projectPath(this.root, relative);
-    if (!(await this.status()).conflicts.includes(relative)) throw new Error('This file has no unresolved conflict.');
+    if (!(await this.status()).conflicts.includes(relative))
+      throw new Error('This file has no unresolved conflict.');
     const stage = async (number: number): Promise<string> => {
-      try { return await this.run(['show', `:${number}:${relative}`]); } catch { return ''; }
+      try {
+        return await this.run(['show', `:${number}:${relative}`]);
+      } catch {
+        return '';
+      }
     };
     const [base, ours, theirs] = await Promise.all([stage(1), stage(2), stage(3)]);
     return { path: relative, base, ours, theirs };
@@ -183,16 +303,26 @@ export class GitService {
   async resolveConflict(relative: string, content: string | null): Promise<void> {
     await this.mutate(async () => {
       const file = await projectPath(this.root, relative);
-      if (!(await this.status()).conflicts.includes(relative)) throw new Error('This file has no unresolved conflict.');
-      if (content !== null && /^(<{7}|={7}|>{7})(?: |$)/m.test(content)) throw new Error('Remove conflict markers before resolving this file.');
-      if (content === null) await fs.unlink(file).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; });
+      if (!(await this.status()).conflicts.includes(relative))
+        throw new Error('This file has no unresolved conflict.');
+      if (content !== null && /^(<{7}|={7}|>{7})(?: |$)/m.test(content))
+        throw new Error('Remove conflict markers before resolving this file.');
+      if (content === null)
+        await fs.unlink(file).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+        });
       else await atomicWrite(file, content);
       await this.run(['add', '--all', '--', relative]);
     });
   }
   async isAncestor(commit: string): Promise<boolean> {
     if (!/^[0-9a-f]{40,64}$/i.test(commit)) return false;
-    try { await this.run(['merge-base', '--is-ancestor', commit, 'HEAD']); return true; } catch { return false; }
+    try {
+      await this.run(['merge-base', '--is-ancestor', commit, 'HEAD']);
+      return true;
+    } catch {
+      return false;
+    }
   }
   async show(commit: string, relative: string): Promise<string> {
     if (!/^[0-9a-f]{40,64}$/i.test(commit)) throw new Error('Expected a commit SHA.');
@@ -204,22 +334,34 @@ export class GitService {
     return (await this.run(['log', '-1', '--format=%H', '--', relative])).trim();
   }
   async createBranch(name: string): Promise<void> {
-    await this.mutate(async () => { await this.assertNoConflicts(); await this.run(['check-ref-format', '--branch', name]); await this.run(['switch', '-c', name]); });
+    await this.mutate(async () => {
+      await this.assertNoConflicts();
+      await this.run(['check-ref-format', '--branch', name]);
+      await this.run(['switch', '-c', name]);
+    });
   }
   async switchBranch(name: string): Promise<void> {
     await this.mutate(async () => {
       await this.assertNoConflicts();
-      if ((await this.status()).files.length) throw new Error('Commit your local changes before switching branches.');
-      await this.run(['check-ref-format', '--branch', name]); await this.run(['switch', name]);
+      if ((await this.status()).files.length)
+        throw new Error('Commit your local changes before switching branches.');
+      await this.run(['check-ref-format', '--branch', name]);
+      await this.run(['switch', name]);
     });
   }
   static async initialize(root: string): Promise<GitService> {
     await fs.mkdir(root, { recursive: true });
-    const git = new GitService(root); await git.run(['init', '-b', 'main']); return git;
+    const git = new GitService(root);
+    await git.run(['init', '-b', 'main']);
+    return git;
   }
   static async clone(url: string, root: string): Promise<GitService> {
-    if (!/^(https:\/\/|ssh:\/\/|git@)/i.test(url) || /[\r\n\0]/.test(url)) throw new Error('Enter an HTTPS or SSH repository URL.');
-    const parent = path.dirname(root); await fs.mkdir(parent, { recursive: true });
-    const git = new GitService(parent); await git.run(['clone', '--', url, root]); return new GitService(root);
+    if (!/^(https:\/\/|ssh:\/\/|git@)/i.test(url) || /[\r\n\0]/.test(url))
+      throw new Error('Enter an HTTPS or SSH repository URL.');
+    const parent = path.dirname(root);
+    await fs.mkdir(parent, { recursive: true });
+    const git = new GitService(parent);
+    await git.run(['clone', '--', url, root]);
+    return new GitService(root);
   }
 }

@@ -804,7 +804,7 @@ export class Application {
       this.monitorRun();
       this.changed();
       await this.send(
-        'Implement the confirmed design completely. Read get_project_context for the approved revision and context. Inspect current code, implement each task, set development services, and request host verification with evidence when ready. Do not modify approved design or perform Git writes.',
+        'Implement the confirmed design completely. Read get_project_context for the approved revision and context. Inspect current code, implement each task, and set development services. Honor explicit workflow and developer-review checkpoints in the approved design; this generic start instruction does not override them. If a developer-review handoff is required, report readiness and end the turn without requesting verification. Otherwise, when all approved checkpoints are satisfied, request host verification with task evidence. Do not modify approved design or perform Git writes.',
         'implement',
       );
     } catch (error) {

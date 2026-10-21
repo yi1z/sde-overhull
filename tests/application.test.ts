@@ -19,6 +19,7 @@ const doubles = vi.hoisted(() => ({
   interrupt: vi.fn(async () => undefined),
   startThread: vi.fn(async (_options: { threadId?: string }) => 'local-test-thread'),
   respond: vi.fn(async (_id: string | number, _response: unknown) => undefined),
+  changed: vi.fn(),
   verify: vi.fn<(checks: VerificationCheck[], options: VerificationOptions) => Promise<VerificationReport>>(),
   emit: undefined as ((event: AgentEvent) => void) | undefined,
   tool: undefined as ((name: string, args: unknown) => Promise<unknown>) | undefined,
@@ -82,13 +83,15 @@ async function passingReport(
 }
 
 beforeEach(async () => {
-  doubles.send.mockClear();
+  doubles.send.mockReset();
+  doubles.send.mockResolvedValue(undefined);
   doubles.interrupt.mockClear();
   doubles.verify.mockReset();
   doubles.verify.mockImplementation(passingReport);
   doubles.startThread.mockReset();
   doubles.startThread.mockResolvedValue('local-test-thread');
   doubles.respond.mockClear();
+  doubles.changed.mockReset();
   doubles.emit = undefined;
   doubles.tool = undefined;
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'overhull-application-test-'));
@@ -119,7 +122,9 @@ beforeEach(async () => {
     chooseDirectory: async () => undefined,
     chooseFile: async () => undefined,
     openExternal: async () => undefined,
-    event: () => undefined,
+    event: (event) => {
+      if (event.type === 'project-changed') doubles.changed();
+    },
   });
   await app.request('project.open', { path: root });
   await app.request('project.trust');
@@ -146,6 +151,51 @@ async function reportReady(
 }
 
 describe('application implementation boundaries', () => {
+  it.each(['thread', 'send'] as const)(
+    'publishes released ownership after a %s startup failure and permits retry',
+    async (stage) => {
+      const message = `Agent ${stage} startup failed`;
+      let changesBeforeFailure = 0;
+      const fail = async () => {
+        changesBeforeFailure = doubles.changed.mock.calls.length;
+        throw new Error(message);
+      };
+      if (stage === 'thread') doubles.startThread.mockImplementationOnce(fail);
+      else doubles.send.mockImplementationOnce(fail);
+
+      await expect(app.request('run.start')).rejects.toThrow(message);
+      expect(doubles.changed.mock.calls.length).toBeGreaterThan(changesBeforeFailure);
+      const failed = await app.request('project.refresh');
+      expect(failed.activeRunId).toBeUndefined();
+      expect(failed.runs.at(-1)).toMatchObject({ status: 'blocked', summary: `Error: ${message}` });
+      const failedId = failed.runs.at(-1)!.id;
+
+      const retried = await app.request('run.start');
+      expect(retried.runs).toHaveLength(2);
+      expect(retried.activeRunId).toBe(retried.runs.at(-1)!.id);
+      expect(retried.activeRunId).not.toBe(failedId);
+      expect(retried.runs.at(-1)?.continuationOfRunId).toBe(failedId);
+      expect(retried.runs[0].summary).toBe(`Error: ${message}`);
+      const report = JSON.parse(
+        await fs.readFile(path.join(root, '.sde', 'runs', `${retried.activeRunId}.json`), 'utf8'),
+      );
+      expect(report).not.toHaveProperty('activeRunId');
+    },
+  );
+
+  it('reopens blocked history without claiming a live run and allows a new run', async () => {
+    doubles.startThread.mockRejectedValueOnce(new Error('Agent authentication expired'));
+    await expect(app.request('run.start')).rejects.toThrow('authentication expired');
+    const reopened = (await app.request('project.open', { path: root }))!;
+    expect(reopened.activeRunId).toBeUndefined();
+    expect(reopened.runs.at(-1)).toMatchObject({
+      status: 'blocked',
+      summary: 'Error: Agent authentication expired',
+    });
+    const retried = await app.request('run.start');
+    expect(retried.activeRunId).toBe(retried.runs.at(-1)!.id);
+  });
+
   it.each([false, true])(
     'holds the checkout through verification cancellation cleanup (interrupt failure: %s)',
     async (interruptFailure) => {
@@ -331,7 +381,7 @@ describe('application implementation boundaries', () => {
   });
 
   it('blocks completion without coverage or host checks even if the agent claims success', async () => {
-    await app.request('run.start');
+    const started = await app.request('run.start');
     await expect(
       doubles.tool!('complete_implementation', {
         outputCodeDigest: await store.codeDigest(),
@@ -346,6 +396,11 @@ describe('application implementation boundaries', () => {
       { timeout: readinessTimeout },
     );
     expect(doubles.verify).not.toHaveBeenCalled();
+    expect((await app.request('project.refresh')).activeRunId).toBe(started.activeRunId);
+    await expect(app.request('run.start')).rejects.toThrow('Stop the implementation run');
+    const stopped = await app.request('run.cancel');
+    expect(stopped.activeRunId).toBeUndefined();
+    expect(stopped.runs[0].status).toBe('cancelled');
   });
 
   it('prevents another mutable agent turn while host verification is running', async () => {

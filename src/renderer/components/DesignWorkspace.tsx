@@ -252,12 +252,14 @@ export function DesignWorkspace({
       label: 'Implementation tasks are specified',
       passed: draft.tasks.length > 0 && draft.tasks.every((task) => task.title.trim()),
     },
-    {
-      label: 'Required automated checks have executable commands',
+    ...(['test', 'smoke'] as const).map((kind) => ({
+      label: `Required ${kind} checks have executable commands`,
       passed:
-        draft.checks.some((check) => check.required) &&
-        draft.checks.filter((check) => check.required).every((check) => check.command.executable.trim()),
-    },
+        draft.checks.some((check) => check.required && check.kind === kind) &&
+        draft.checks
+          .filter((check) => check.required && check.kind === kind)
+          .every((check) => check.command.executable.trim()),
+    })),
     {
       label: 'Blocking questions have answers',
       passed: draft.questions.every((question) => !question.blocking || question.answer?.trim()),

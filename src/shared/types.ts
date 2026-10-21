@@ -259,6 +259,8 @@ export type ProjectView = {
   git: GitStatus;
   readOnly: boolean;
   warnings: string[];
+  /** Run currently owned by this application instance; never persisted in shared metadata. */
+  activeRunId?: string;
   verifiedRunId?: string;
   serviceStatus?: ServiceStatus[];
 };

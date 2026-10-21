@@ -169,7 +169,11 @@ export class Application {
   }
   private async view(): Promise<ProjectView> {
     const view = await this.project().load();
-    return { ...view, serviceStatus: this.supervisor?.status() ?? [] };
+    return {
+      ...view,
+      activeRunId: this.activeRun?.id,
+      serviceStatus: this.supervisor?.status() ?? [],
+    };
   }
   private serialize<T>(action: () => Promise<T>): Promise<T> {
     const next = this.mutation.catch(() => undefined).then(action);
@@ -814,6 +818,7 @@ export class Application {
       } finally {
         this.activeRun = undefined;
         await this.releaseCheckout();
+        this.changed();
       }
       throw error;
     }

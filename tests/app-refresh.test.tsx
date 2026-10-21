@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { App } from '../src/renderer/App';
 import {
   DesignRevisionSchema,
+  ServiceSchema,
   SettingsSchema,
   type AppEvent,
   type DesignRevision,
@@ -135,5 +136,90 @@ describe('background refresh ordering', () => {
       await older;
     });
     expect((title as HTMLInputElement).value).toBe('Newest read');
+  });
+
+  it('does not restore old run ownership when service startup finishes after a project refresh', async () => {
+    const initial = fixture();
+    initial.activeRunId = 'run-active';
+    initial.services = [
+      ServiceSchema.parse({ id: 'web', name: 'Task board', command: { executable: 'node' } }),
+    ];
+    let finishStartup!: (states: ProjectView['serviceStatus']) => void;
+    const startup = new Promise<ProjectView['serviceStatus']>((resolve) => {
+      finishStartup = resolve;
+    });
+    const implementation = request.getMockImplementation()!;
+    request.mockImplementation((method, input) => {
+      if (method === 'project.open') return Promise.resolve(initial);
+      if (method === 'services.start') return startup;
+      if (method === 'project.refresh')
+        return Promise.resolve({
+          ...initial,
+          activeRunId: undefined,
+          design: { ...initial.design, title: 'Newer design state' },
+        });
+      return implementation(method, input);
+    });
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open repository' }));
+    await screen.findByRole('textbox', { name: 'Draft title' });
+    fireEvent.click(screen.getByRole('button', { name: 'Implement 02' }));
+    expect(screen.getByRole('button', { name: 'Stop run' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Start dev' }));
+    act(() => emit({ type: 'project-changed' }));
+    await screen.findByText('Newer design state');
+    expect(screen.queryByRole('button', { name: 'Stop run' })).toBeNull();
+    await act(async () => {
+      finishStartup([{ id: 'web', name: 'Task board', state: 'ready' }]);
+      await startup;
+    });
+    expect(screen.getByText('ready')).toBeTruthy();
+    expect(screen.getByText('Newer design state')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Stop run' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Implement design' })).toBeTruthy();
+  });
+
+  it('ignores service startup results from a repository that has since been closed', async () => {
+    const initial = fixture();
+    initial.services = [
+      ServiceSchema.parse({ id: 'web', name: 'Task board', command: { executable: 'node' } }),
+    ];
+    const other = fixture('Other design');
+    other.root = '/other-project';
+    other.manifest = { ...other.manifest, id: 'other-project', name: 'Other project' };
+    let finishStartup!: (states: ProjectView['serviceStatus']) => void;
+    const startup = new Promise<ProjectView['serviceStatus']>((resolve) => {
+      finishStartup = resolve;
+    });
+    let opened = false;
+    const implementation = request.getMockImplementation()!;
+    request.mockImplementation((method, input) => {
+      if (method === 'project.open') {
+        const view = opened ? other : initial;
+        opened = true;
+        return Promise.resolve(view);
+      }
+      if (method === 'services.start') return startup;
+      return implementation(method, input);
+    });
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open repository' }));
+    await screen.findByRole('textbox', { name: 'Draft title' });
+    fireEvent.click(screen.getByRole('button', { name: 'Implement 02' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start dev' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test project' }));
+    await screen.findByRole('button', { name: 'Other project' });
+    await act(async () => {
+      finishStartup([{ id: 'web', name: 'Task board', state: 'ready' }]);
+      await startup;
+    });
+    expect(screen.getByRole('button', { name: 'Other project' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Test project' })).toBeNull();
+    expect((screen.getByRole('textbox', { name: 'Draft title' }) as HTMLInputElement).value).toBe(
+      'Other design',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Implement 02' }));
+    expect(screen.queryByText('Task board')).toBeNull();
+    expect(screen.queryByText('ready')).toBeNull();
   });
 });

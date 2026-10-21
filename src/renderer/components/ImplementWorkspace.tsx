@@ -41,8 +41,8 @@ export function ImplementWorkspace({
   const [env, setEnv] = useState('');
   const [error, setError] = useState('');
   const [tab, setTab] = useState<'tasks' | 'checks' | 'changes' | 'logs'>('tasks');
-  const run = project.runs.at(-1);
-  const active = run && ['running', 'waiting', 'verifying', 'blocked'].includes(run.status);
+  const run = project.runs.findLast((item) => item.designId === project.design.id);
+  const active = !!project.activeRunId;
   const approved = project.approvals.some((a) => a.designId === project.design.id);
   const verified = run && project.verifiedRunId === run.id;
   return (

@@ -569,7 +569,9 @@ export function App() {
                   onServices={async (operation) => {
                     await action(async () => {
                       const states = await window.sde.request(`services.${operation}`);
-                      setProject({ ...project, serviceStatus: states });
+                      setProject((current) =>
+                        current?.root === project.root ? { ...current, serviceStatus: states } : current,
+                      );
                     }).catch(() => {});
                   }}
                   onOpen={(url) => void window.sde.request('services.open', { url }).catch(report)}
@@ -593,7 +595,11 @@ export function App() {
                     }
                   }}
                   onAttach={async (id) => {
-                    accept(await window.sde.request('evaluation.attach', { id }));
+                    const view = await window.sde.request('evaluation.attach', { id });
+                    accept(view);
+                    const item = view.feedback.find((feedback) => feedback.id === id);
+                    if (!item) throw new Error('Feedback item no longer exists.');
+                    return item;
                   }}
                   onNewRound={async (ids) => {
                     await action(async () => {

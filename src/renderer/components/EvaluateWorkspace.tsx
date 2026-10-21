@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Plus,
   MessageSquare,
@@ -19,16 +19,30 @@ export function EvaluateWorkspace({
 }: {
   project: ProjectView;
   onSave: (item: EvaluationItem) => Promise<void>;
-  onAttach: (id: string) => Promise<void>;
+  onAttach: (id: string) => Promise<EvaluationItem>;
   onNewRound: (ids: string[]) => Promise<void>;
 }) {
   const [item, setItem] = useState<EvaluationItem | null>(null);
   const [comment, setComment] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [layout, setLayout] = useState<'board' | 'list'>('board');
   const [filter, setFilter] = useState('all');
+  const openItem = (value: EvaluationItem) => {
+    setItem(structuredClone(value));
+    setComment('');
+    setError('');
+  };
+  const close = () => {
+    if (pending.current) return;
+    setItem(null);
+    setComment('');
+    setError('');
+  };
   const create = () =>
-    setItem({
+    openItem({
       id: crypto.randomUUID(),
       title: '',
       body: '',
@@ -36,12 +50,51 @@ export function EvaluateWorkspace({
       priority: 'medium',
       status: 'open',
       roundId: project.design.roundId,
-      runId: project.runs.at(-1)?.id,
+      runId: project.runs.findLast((run) => run.designId === project.design.id)?.id,
       author: 'Developer',
       createdAt: new Date().toISOString(),
       comments: [],
       attachments: [],
     });
+  async function save(action: 'save' | 'attach') {
+    if (!item?.title.trim() || pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setError('');
+    let saved = false;
+    const next = comment.trim()
+      ? {
+          ...item,
+          comments: [
+            ...item.comments,
+            {
+              id: crypto.randomUUID(),
+              author: 'Developer',
+              text: comment.trim(),
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        }
+      : item;
+    try {
+      await onSave(next);
+      saved = true;
+      setItem(next);
+      setComment('');
+      if (action === 'attach') setItem(await onAttach(next.id));
+      else setItem(null);
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      setError(
+        saved
+          ? `Could not attach the file: ${detail} Your feedback is saved. Try attaching the file again.`
+          : `Could not save feedback: ${detail} Your edits are still here. Try again.`,
+      );
+    } finally {
+      pending.current = false;
+      setBusy(false);
+    }
+  }
   const visible = project.feedback.filter((f) => filter === 'all' || f.kind === filter);
   const icon = (kind: string) =>
     kind === 'bug' ? (
@@ -69,7 +122,7 @@ export function EvaluateWorkspace({
           }
         />
       </div>
-      <button className="text-button card-title" onClick={() => setItem(structuredClone(feedback))}>
+      <button className="text-button card-title" onClick={() => openItem(feedback)}>
         {feedback.title}
       </button>
       <p>{feedback.body}</p>
@@ -142,12 +195,13 @@ export function EvaluateWorkspace({
         </div>
       )}
       {item && (
-        <Modal title={item.title ? 'Feedback details' : 'New feedback'} onClose={() => setItem(null)}>
-          <div className="modal-body">
+        <Modal title={item.title ? 'Feedback details' : 'New feedback'} onClose={close}>
+          <div className="modal-body" aria-busy={busy}>
             <label className="field">
               Title
               <input
                 autoFocus
+                disabled={busy}
                 value={item.title}
                 onChange={(e) => setItem({ ...item, title: e.target.value })}
               />
@@ -156,6 +210,7 @@ export function EvaluateWorkspace({
               Observation or suggestion
               <textarea
                 rows={5}
+                disabled={busy}
                 value={item.body}
                 onChange={(e) => setItem({ ...item, body: e.target.value })}
               />
@@ -164,7 +219,11 @@ export function EvaluateWorkspace({
               {(['kind', 'priority', 'status'] as const).map((key) => (
                 <label className="field" key={key}>
                   {key}
-                  <select value={item[key]} onChange={(e) => setItem({ ...item, [key]: e.target.value })}>
+                  <select
+                    value={item[key]}
+                    disabled={busy}
+                    onChange={(e) => setItem({ ...item, [key]: e.target.value })}
+                  >
                     {(key === 'kind'
                       ? ['bug', 'idea', 'question']
                       : key === 'priority'
@@ -181,6 +240,7 @@ export function EvaluateWorkspace({
               Related screen, diagram node, or code location
               <input
                 value={item.target ?? ''}
+                disabled={busy}
                 onChange={(e) => setItem({ ...item, target: e.target.value })}
                 placeholder="Optional reference"
               />
@@ -193,47 +253,31 @@ export function EvaluateWorkspace({
             ))}
             <label className="field">
               Add a comment
-              <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
+              <textarea
+                rows={2}
+                value={comment}
+                disabled={busy}
+                onChange={(e) => setComment(e.target.value)}
+              />
             </label>
             {item.attachments.map((file) => (
               <small key={file}>{file}</small>
             ))}
+            {error && (
+              <p className="error-text" role="alert">
+                {error}
+              </p>
+            )}
           </div>
           <footer className="modal-actions">
-            <button
-              onClick={async () => {
-                if (!item.title.trim()) return;
-                await onSave(item);
-                await onAttach(item.id);
-                setItem(null);
-              }}
-              disabled={!item.title.trim()}
-            >
+            <button onClick={() => void save('attach')} disabled={busy || !item.title.trim()}>
               <Paperclip size={15} />
               Attach file
             </button>
             <button
               className="primary"
-              disabled={!item.title.trim()}
-              onClick={async () => {
-                const next = comment.trim()
-                  ? {
-                      ...item,
-                      comments: [
-                        ...item.comments,
-                        {
-                          id: crypto.randomUUID(),
-                          author: 'Developer',
-                          text: comment.trim(),
-                          createdAt: new Date().toISOString(),
-                        },
-                      ],
-                    }
-                  : item;
-                await onSave(next);
-                setComment('');
-                setItem(null);
-              }}
+              disabled={busy || !item.title.trim()}
+              onClick={() => void save('save')}
             >
               Save feedback
             </button>

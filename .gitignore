@@ -9,4 +9,6 @@ test-results/
 !.env.example
 *.log
 .sde-local/
+# The sample has its own Git history and workflow evidence.
+/sample project/sde-overhull-sample-project/
 .DS_Store

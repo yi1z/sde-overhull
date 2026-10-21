@@ -1,0 +1,173 @@
+import { useState } from 'react';
+import { Monitor, Sun, Moon, CheckCircle2, AlertCircle } from 'lucide-react';
+import type { AgentDiagnostics, Settings } from '../../shared/types';
+import { Modal } from './Modal';
+export function SettingsDialog({
+  settings,
+  onSave,
+  onClose,
+  onDiagnose,
+}: {
+  settings: Settings;
+  onSave: (settings: Partial<Settings>) => Promise<void>;
+  onClose: () => void;
+  onDiagnose: () => Promise<AgentDiagnostics>;
+}) {
+  const [value, setValue] = useState(settings);
+  const [diagnostics, setDiagnostics] = useState<AgentDiagnostics>();
+  const [checking, setChecking] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  return (
+    <Modal
+      title="Workspace settings"
+      description="Appearance and agent preferences are saved only on this machine."
+      onClose={onClose}
+    >
+      <div className="modal-body">
+        <h3>Appearance</h3>
+        <div className="theme-options">
+          {(
+            [
+              { id: 'system', Icon: Monitor },
+              { id: 'light', Icon: Sun },
+              { id: 'dark', Icon: Moon },
+            ] as const
+          ).map(({ id, Icon }) => (
+            <button
+              className={value.theme === id ? 'active' : ''}
+              key={id}
+              onClick={() => setValue({ ...value, theme: id })}
+            >
+              <Icon size={20} />
+              {id}
+            </button>
+          ))}
+        </div>
+        <label className="field">
+          Interface scale <strong>{Math.round(value.scale * 100)}%</strong>
+          <input
+            type="range"
+            min="80"
+            max="150"
+            step="5"
+            value={value.scale * 100}
+            onChange={(e) => setValue({ ...value, scale: Number(e.target.value) / 100 })}
+          />
+        </label>
+        <label className="field">
+          Artifact outline width <strong>{value.outlineWidth}px</strong>
+          <input
+            type="range"
+            min="160"
+            max="500"
+            step="10"
+            value={value.outlineWidth}
+            onChange={(e) => setValue({ ...value, outlineWidth: Number(e.target.value) })}
+          />
+        </label>
+        <div className="form-grid">
+          <label className="field">
+            Density
+            <select
+              value={value.density}
+              onChange={(e) => setValue({ ...value, density: e.target.value as Settings['density'] })}
+            >
+              <option>comfortable</option>
+              <option>compact</option>
+            </select>
+          </label>
+          <label className="field">
+            Editor font size
+            <input
+              type="number"
+              min="11"
+              max="24"
+              value={value.editorFontSize}
+              onChange={(e) => setValue({ ...value, editorFontSize: Number(e.target.value) })}
+            />
+          </label>
+        </div>
+        <h3>Agent connection</h3>
+        <p className="muted">Overhull uses your installed Codex CLI and its existing sign-in.</p>
+        <label className="field">
+          Codex executable
+          <input
+            value={value.codexPath}
+            onChange={(e) => setValue({ ...value, codexPath: e.target.value })}
+            placeholder="codex"
+          />
+        </label>
+        <label className="field">
+          Model
+          <input
+            list="models"
+            value={value.model}
+            onChange={(e) => setValue({ ...value, model: e.target.value })}
+            placeholder="Use Codex default"
+          />
+          <datalist id="models">
+            {diagnostics?.models.map((model) => (
+              <option value={model.id} key={model.id}>
+                {model.name}
+              </option>
+            ))}
+          </datalist>
+        </label>
+        <button
+          disabled={checking || saving}
+          onClick={async () => {
+            setChecking(true);
+            setError('');
+            try {
+              await onSave(value);
+              setDiagnostics(await onDiagnose());
+            } catch (e) {
+              setError(String(e));
+            } finally {
+              setChecking(false);
+            }
+          }}
+        >
+          {checking ? 'Checking…' : 'Check connection'}
+        </button>
+        {diagnostics && (
+          <div className={`connection-result ${diagnostics.authenticated ? 'success-text' : 'warning-text'}`}>
+            {diagnostics.authenticated ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+            <span>
+              {diagnostics.error ||
+                `${diagnostics.available ? 'Codex found' : 'Codex not found'} · ${diagnostics.authenticated ? 'Signed in' : 'Run codex login in a terminal'}`}
+              {diagnostics.version && <small>{diagnostics.version}</small>}
+            </span>
+          </div>
+        )}
+        {error && (
+          <p className="error-text" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+      <footer className="modal-actions">
+        <button onClick={onClose}>Cancel</button>
+        <button
+          className="primary"
+          disabled={checking || saving}
+          onClick={async () => {
+            setSaving(true);
+            setError('');
+            try {
+              await onSave(value);
+              onClose();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? 'Saving…' : 'Save settings'}
+        </button>
+      </footer>
+    </Modal>
+  );
+}

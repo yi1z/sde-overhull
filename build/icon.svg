@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Overhull</title>
+  <desc id="description">Three connected isometric modules for design, implementation, and evaluation.</desc>
+  <rect x="48" y="48" width="928" height="928" rx="208" fill="#0d1117" stroke="#30363d" stroke-width="4"/>
+  <polygon points="512,227 662,317 512,407 362,317" fill="#58a6ff"/>
+  <polygon points="362,317 512,407 512,557 362,467" fill="#161b22"/>
+  <polygon points="512,407 662,317 662,467 512,557" fill="#21262d"/>
+  <polygon points="362,467 512,557 362,647 212,557" fill="#30363d"/>
+  <polygon points="212,557 362,647 362,797 212,707" fill="#161b22"/>
+  <polygon points="362,647 512,557 512,707 362,797" fill="#21262d"/>
+  <polygon points="662,467 812,557 662,647 512,557" fill="#30363d"/>
+  <polygon points="512,557 662,647 662,797 512,707" fill="#161b22"/>
+  <polygon points="662,647 812,557 812,707 662,797" fill="#21262d"/>
+  <g fill="none" stroke="#e6edf3" stroke-width="25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M212 557L212 707"/>
+    <path d="M212 557L362 467"/>
+    <path d="M212 557L362 647"/>
+    <path d="M212 707L362 797"/>
+    <path d="M362 317L362 467"/>
+    <path d="M362 317L512 227"/>
+    <path d="M362 317L512 407"/>
+    <path d="M362 467L512 557"/>
+    <path d="M362 647L362 797"/>
+    <path d="M362 647L512 557"/>
+    <path d="M362 797L512 707"/>
+    <path d="M512 227L662 317"/>
+    <path d="M512 407L512 557"/>
+    <path d="M512 407L662 317"/>
+    <path d="M512 557L512 707"/>
+    <path d="M512 557L662 467"/>
+    <path d="M512 557L662 647"/>
+    <path d="M512 707L662 797"/>
+    <path d="M662 317L662 467"/>
+    <path d="M662 467L812 557"/>
+    <path d="M662 647L662 797"/>
+    <path d="M662 647L812 557"/>
+    <path d="M662 797L812 707"/>
+    <path d="M812 557L812 707"/>
+  </g>
+</svg>

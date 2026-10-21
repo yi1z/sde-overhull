@@ -1,0 +1,105 @@
+name: Desktop validation
+on:
+  push:
+    branches: [main, 'main-*']
+    paths-ignore: ['docs/**', 'README.md']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
+          - os: macos-latest
+            platform: mac
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - name: Install Linux display dependencies
+        if: runner.os == 'Linux'
+        run: pnpm exec playwright install-deps chromium
+      - name: Desktop interaction tests (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm test:e2e
+      - name: Desktop interaction tests
+        if: runner.os != 'Linux'
+        run: pnpm test:e2e
+      - name: Build native package
+        run: pnpm exec electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # This job receives no signing certificates; permit certificate-free
+          # ad-hoc signing so pull-request packages pass the same native checks.
+          CSC_FOR_PULL_REQUEST: 'true'
+      - name: Verify native macOS signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app_directory=release/mac
+          if [ '${{ matrix.arch }}' = 'arm64' ]; then
+            app_directory=release/mac-arm64
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app_directory/Overhull.app"
+      - name: Smoke-test native package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root release/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 release/linux-unpacked/chrome-sandbox
+          xvfb-run -a pnpm test:package
+      - name: Smoke-test native package
+        if: runner.os != 'Linux'
+        run: pnpm test:package
+      - name: Upload native installer
+        id: installer
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: overhull-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+      - name: Report unavailable installer upload
+        if: steps.installer.outcome == 'failure'
+        shell: bash
+        run: echo 'Native build and smoke checks passed, but installer upload failed. Check the artifact step for account quota or network errors. Reproduce the installer with the documented native build command.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Print UI failure context
+        if: failure()
+        shell: bash
+        run: find test-results -name error-context.md -exec cat '{}' \; 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        continue-on-error: true
+        with:
+          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

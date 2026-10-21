@@ -1,0 +1,320 @@
+import { useState } from 'react';
+import {
+  Play,
+  Square,
+  RotateCcw,
+  ExternalLink,
+  CheckCircle2,
+  Clock,
+  FileCode2,
+  Terminal,
+  Settings2,
+  ShieldCheck,
+} from 'lucide-react';
+import { z } from 'zod';
+import { ServiceSchema, type ProjectView, type ServiceDefinition } from '../../shared/types';
+import { Modal } from './Modal';
+type Props = {
+  project: ProjectView;
+  logs: string[];
+  onStart: () => Promise<void>;
+  onCancel: () => Promise<void>;
+  onVerify: () => Promise<void>;
+  onServices: (action: 'start' | 'stop' | 'restart') => Promise<void>;
+  onOpen: (url: string) => void;
+  onSaveServices: (services: ServiceDefinition[]) => Promise<void>;
+  onEnv: (values: Record<string, string>) => Promise<void>;
+};
+export function ImplementWorkspace({
+  project,
+  logs,
+  onStart,
+  onCancel,
+  onVerify,
+  onServices,
+  onOpen,
+  onSaveServices,
+  onEnv,
+}: Props) {
+  const [settings, setSettings] = useState(false);
+  const [source, setSource] = useState('');
+  const [env, setEnv] = useState('');
+  const [error, setError] = useState('');
+  const [tab, setTab] = useState<'tasks' | 'checks' | 'changes' | 'logs'>('tasks');
+  const run = project.runs.findLast((item) => item.designId === project.design.id);
+  const active = !!project.activeRunId;
+  const approved = project.approvals.some((a) => a.designId === project.design.id);
+  const verified = run && project.verifiedRunId === run.id;
+  return (
+    <section className="phase-workspace">
+      <div className="workspace-title">
+        <div>
+          <span className="eyebrow">IMPLEMENT</span>
+          <h1>From agreed design to working software.</h1>
+          <p>The agent builds locally. Every completed task is backed by evidence.</p>
+        </div>
+        {active ? (
+          <button onClick={() => void onCancel()}>
+            <Square size={15} />
+            Stop run
+          </button>
+        ) : (
+          <button className="primary" disabled={!approved || project.readOnly} onClick={() => void onStart()}>
+            <Play size={15} />
+            Implement design
+          </button>
+        )}
+      </div>
+      <div className="implementation-overview">
+        <div className="metric">
+          <span>DESIGN</span>
+          <strong>{approved ? 'Confirmed' : 'Awaiting confirmation'}</strong>
+          <small>{project.design.title}</small>
+        </div>
+        <div className="metric">
+          <span>TASK COVERAGE</span>
+          <strong>
+            {Object.keys(run?.taskEvidence ?? {}).length}
+            <em> / {project.design.tasks.length}</em>
+          </strong>
+          <small>Implementation evidence</small>
+        </div>
+        <div className="metric">
+          <span>VERIFICATION</span>
+          <strong className={verified ? 'success-text' : ''}>
+            {verified ? (
+              <>
+                <ShieldCheck size={18} />
+                Agent verified
+              </>
+            ) : run?.status === 'complete' ? (
+              'Changed since verification'
+            ) : (
+              (run?.status ?? 'Not started')
+            )}
+          </strong>
+          <small>{run?.checks.filter((c) => c.status === 'passed').length ?? 0} checks passed</small>
+        </div>
+      </div>
+      {run?.summary && (
+        <div
+          className={`run-summary ${run.status === 'blocked' || run.status === 'failed' ? 'warning' : ''}`}
+        >
+          <Clock size={16} />
+          <span>{run.summary}</span>
+        </div>
+      )}
+      <div className="dev-services">
+        <header>
+          <div>
+            <h3>
+              <Terminal size={16} />
+              Development services
+            </h3>
+            <p>Start the application and its dependencies together.</p>
+          </div>
+          <div className="button-row">
+            <button
+              className="icon-button"
+              aria-label="Configure services"
+              onClick={() => {
+                setSource(JSON.stringify(project.services, null, 2));
+                setSettings(true);
+              }}
+            >
+              <Settings2 size={16} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="Restart services"
+              onClick={() => void onServices('restart')}
+              disabled={!project.services.length}
+            >
+              <RotateCcw size={15} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="Stop services"
+              onClick={() => void onServices('stop')}
+            >
+              <Square size={15} />
+            </button>
+            <button
+              className="primary small"
+              onClick={() => void onServices('start')}
+              disabled={!project.services.length}
+            >
+              <Play size={14} />
+              Start dev
+            </button>
+          </div>
+        </header>
+        {!project.services.length ? (
+          <div className="empty-inline">
+            The agent will configure development services during implementation.
+          </div>
+        ) : (
+          project.services.map((service) => {
+            const state = project.serviceStatus?.find((s) => s.id === service.id);
+            return (
+              <div className="service-row" key={service.id}>
+                <span className={`status-dot ${state?.state ?? 'stopped'}`} />
+                <strong>{service.name}</strong>
+                <code>
+                  {service.command.executable} {service.command.args.join(' ')}
+                </code>
+                <span className="muted">{state?.message || state?.state || 'stopped'}</span>
+                {service.url && (
+                  <button
+                    className="icon-button"
+                    aria-label={`Open ${service.name}`}
+                    onClick={() => onOpen(service.url!)}
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+      <div className="workspace-toolbar">
+        <div className="tab-strip">
+          {(['tasks', 'checks', 'changes', 'logs'] as const).map((t) => (
+            <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
+              {t === 'tasks'
+                ? 'Tasks'
+                : t === 'checks'
+                  ? 'Verification'
+                  : t === 'changes'
+                    ? 'Changed files'
+                    : 'Output'}
+            </button>
+          ))}
+        </div>
+        {active && (
+          <button className="small" onClick={() => void onVerify()}>
+            Run checks
+          </button>
+        )}
+      </div>
+      <div className="implementation-detail">
+        {tab === 'tasks' &&
+          (!project.design.tasks.length ? (
+            <div className="empty-panel">
+              <FileCode2 size={28} />
+              <h3>Your implementation plan will appear here.</h3>
+              <p>Work with the agent in Design, then confirm a revision to begin.</p>
+            </div>
+          ) : (
+            project.design.tasks.map((task) => (
+              <div className="task-row" key={task.id}>
+                {run?.taskEvidence[task.id] ? (
+                  <CheckCircle2 size={19} className="success-text" />
+                ) : (
+                  <span className="task-circle" />
+                )}
+                <div>
+                  <strong>{task.title}</strong>
+                  <p>{task.description}</p>
+                  {run?.taskEvidence[task.id] && <div className="evidence">{run.taskEvidence[task.id]}</div>}
+                </div>
+              </div>
+            ))
+          ))}
+        {tab === 'checks' &&
+          project.design.checks.map((check) => {
+            const result = run?.checks.find((c) => c.checkId === check.id);
+            return (
+              <details className="check-row" key={check.id}>
+                <summary>
+                  <span className={`status-pill ${result?.status ?? ''}`}>{result?.status ?? 'pending'}</span>
+                  <strong>{check.title}</strong>
+                  <span className="muted">
+                    {check.kind} · {check.required ? 'required' : 'optional'}
+                  </span>
+                </summary>
+                <code>
+                  {check.command.executable} {check.command.args.join(' ')}
+                </code>
+                <pre>{result?.output ?? 'This check has not run yet.'}</pre>
+              </details>
+            );
+          })}
+        {tab === 'changes' &&
+          project.git.files.map((file) => (
+            <div className="changed-file" key={file.path}>
+              <FileCode2 size={15} />
+              <code>{file.path}</code>
+              <span>
+                {file.index}
+                {file.worktree}
+              </span>
+            </div>
+          ))}
+        {tab === 'logs' && (
+          <pre className="log-view">{logs.join('\n') || 'Process output will appear here.'}</pre>
+        )}
+      </div>
+      {settings && (
+        <Modal
+          title="Development configuration"
+          description="Service definitions are shared in Git. Environment values stay on this machine."
+          onClose={() => setSettings(false)}
+          wide
+        >
+          <div className="modal-body">
+            <label className="field">
+              Service manifest
+              <textarea
+                className="source-editor"
+                rows={16}
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              Local environment values · NAME=value, one per line
+              <textarea
+                rows={3}
+                value={env}
+                onChange={(e) => setEnv(e.target.value)}
+                placeholder="DATABASE_URL=…"
+              />
+            </label>
+            {error && <p className="error-text">{error}</p>}
+          </div>
+          <footer className="modal-actions">
+            <button
+              className="primary"
+              onClick={async () => {
+                try {
+                  const services = z.array(ServiceSchema).parse(JSON.parse(source));
+                  await onSaveServices(services);
+                  if (env.trim())
+                    await onEnv(
+                      Object.fromEntries(
+                        env
+                          .split('\n')
+                          .filter(Boolean)
+                          .map((line) => {
+                            const idx = line.indexOf('=');
+                            if (idx < 1) throw new Error('Environment values require NAME=value.');
+                            return [line.slice(0, idx).trim(), line.slice(idx + 1)];
+                          }),
+                      ),
+                    );
+                  setSettings(false);
+                } catch (err) {
+                  setError(String(err));
+                }
+              }}
+            >
+              Save configuration
+            </button>
+          </footer>
+        </Modal>
+      )}
+    </section>
+  );
+}

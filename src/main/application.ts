@@ -990,30 +990,38 @@ export class Application {
     const run = this.activeRun;
     this.activeRun = undefined;
     try {
-      try {
-        await this.agent?.interrupt();
-      } catch (error) {
-        // A dead transport must not release the checkout before check processes stop.
-        this.host.event({
-          type: 'agent',
-          data: { type: 'error', text: `Agent interruption failed; closing its process: ${String(error)}` },
-        });
+      if (this.shuttingDown) {
+        // A final agent turn can outlive complete_implementation. Closing must
+        // stop our transport without waiting for its interrupt acknowledgement.
         await this.disconnectAgent();
+      } else {
+        try {
+          await this.agent?.interrupt();
+        } catch (error) {
+          // A dead transport must not release the checkout before check processes stop.
+          this.host.event({
+            type: 'agent',
+            data: { type: 'error', text: `Agent interruption failed; closing its process: ${String(error)}` },
+          });
+          await this.disconnectAgent();
+        }
       }
       await this.verificationTask?.catch(() => undefined);
       await this.monitorTask?.catch(() => undefined);
       this.busyAgent = false;
       if (run) {
-        run.status = 'cancelled';
+        run.status = this.shuttingDown ? 'interrupted' : 'cancelled';
         run.finishedAt = new Date().toISOString();
         run.checkpointDigest = await this.project().codeDigest();
-        run.summary += '\nStopped by developer. Partial edits retained.';
+        run.summary += this.shuttingDown
+          ? '\nWorkspace closed. Partial edits retained.'
+          : '\nStopped by developer. Partial edits retained.';
         await this.project().saveRun(run);
       }
     } finally {
       await this.releaseCheckout();
     }
-    this.changed();
+    if (!this.shuttingDown) this.changed();
   }
   private async releaseCheckout() {
     const release = this.releaseRunLock;

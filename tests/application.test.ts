@@ -9,6 +9,7 @@ import { DesignRevisionSchema, type AgentEvent, type VerificationCheck } from '.
 import type { VerificationOptions, VerificationReport } from '../src/main/verification';
 import { saveRunLog } from '../src/main/run-logs';
 import { Preferences } from '../src/main/preferences';
+import { acquireRunLock } from '../src/main/run-lock';
 
 const readinessTimeout = process.env.CI ? 30000 : 10000;
 
@@ -16,7 +17,8 @@ const readinessTimeout = process.env.CI ? 30000 : 10000;
 // approvals, application gates, persisted run evidence, and local preferences are real.
 const doubles = vi.hoisted(() => ({
   send: vi.fn(async (_text: string) => undefined),
-  interrupt: vi.fn(async () => undefined),
+  interrupt: vi.fn<() => Promise<void>>(async () => undefined),
+  dispose: vi.fn(async () => undefined),
   startThread: vi.fn(async (_options: { threadId?: string }) => 'local-test-thread'),
   respond: vi.fn(async (_id: string | number, _response: unknown) => undefined),
   changed: vi.fn(),
@@ -34,7 +36,7 @@ vi.mock('../src/main/codex', () => ({
     send = doubles.send;
     interrupt = doubles.interrupt;
     respond = doubles.respond;
-    async dispose() {}
+    dispose = doubles.dispose;
     async diagnostics() {
       return { available: true, authenticated: true, models: [] };
     }
@@ -85,7 +87,10 @@ async function passingReport(
 beforeEach(async () => {
   doubles.send.mockReset();
   doubles.send.mockResolvedValue(undefined);
-  doubles.interrupt.mockClear();
+  doubles.interrupt.mockReset();
+  doubles.interrupt.mockResolvedValue(undefined);
+  doubles.dispose.mockReset();
+  doubles.dispose.mockResolvedValue(undefined);
   doubles.verify.mockReset();
   doubles.verify.mockImplementation(passingReport);
   doubles.startThread.mockReset();
@@ -280,6 +285,91 @@ describe('application implementation boundaries', () => {
       await expect(app.request('run.start')).resolves.toBeTruthy();
     } finally {
       await other.dispose();
+    }
+  });
+
+  it('closes an unresponsive final agent turn without changing completed evidence', async () => {
+    await app.request('run.start');
+    await reportReady();
+    await vi.waitFor(() => expect(doubles.send).toHaveBeenCalledTimes(2), { timeout: readinessTimeout });
+    const verified = (await store.load()).runs[0];
+    await doubles.tool!('complete_implementation', {
+      outputCodeDigest: verified.outputCodeDigest,
+      summary: 'Verified implementation is complete.',
+    });
+    // The final turn has not emitted turn-complete and never acknowledges a stop.
+    let acknowledge!: () => void;
+    doubles.interrupt.mockImplementationOnce(() => new Promise<void>((resolve) => (acknowledge = resolve)));
+    doubles.dispose.mockClear();
+    let closed = false;
+    const closing = app.dispose().then(() => {
+      closed = true;
+    });
+    try {
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 3000 });
+      expect(doubles.interrupt).not.toHaveBeenCalled();
+      expect(doubles.dispose).toHaveBeenCalledTimes(1);
+      expect((await store.load()).runs[0]).toMatchObject({
+        id: verified.id,
+        status: 'complete',
+        outputCodeDigest: verified.outputCodeDigest,
+        summary: 'Verified implementation is complete.',
+      });
+    } finally {
+      acknowledge?.();
+      await closing;
+    }
+  });
+
+  it('preserves interrupted edits and holds ownership until shutdown verification cleanup finishes', async () => {
+    let release!: () => void;
+    const verificationRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let verificationSignal: AbortSignal | undefined;
+    doubles.verify.mockImplementation(async (checks, options) => {
+      verificationSignal = options.signal;
+      await verificationRelease;
+      return passingReport(checks, options);
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      const started = await app.request('run.start');
+      const partialSource = 'export const value = 2; // Partial implementation retained on close\n';
+      await fs.writeFile(path.join(root, 'index.js'), partialSource);
+      await reportReady();
+      await vi.waitFor(() => expect(doubles.verify).toHaveBeenCalledTimes(1), {
+        timeout: readinessTimeout,
+      });
+      doubles.dispose.mockClear();
+      let closed = false;
+      closing = app.dispose().then(() => {
+        closed = true;
+      });
+      await vi.waitFor(() => expect(doubles.dispose).toHaveBeenCalledTimes(1), {
+        timeout: readinessTimeout,
+      });
+      expect(verificationSignal?.aborted).toBe(true);
+      expect(doubles.interrupt).not.toHaveBeenCalled();
+      expect(closed).toBe(false);
+      await expect(acquireRunLock(root, 'another-run')).rejects.toThrow('owns this checkout');
+      release();
+      await closing;
+      expect(await fs.readFile(path.join(root, 'index.js'), 'utf8')).toBe(partialSource);
+      const interrupted = (await store.load()).runs[0];
+      expect(interrupted).toMatchObject({
+        id: started.activeRunId,
+        status: 'interrupted',
+        checkpointDigest: await store.codeDigest(),
+      });
+      expect(interrupted.finishedAt).toBeTruthy();
+      expect(interrupted.summary).toContain('Workspace closed. Partial edits retained.');
+      expect(doubles.send).toHaveBeenCalledTimes(1);
+      const releaseOwnership = await acquireRunLock(root, 'another-run');
+      await releaseOwnership();
+    } finally {
+      release();
+      await closing;
     }
   });
 

@@ -2,6 +2,30 @@
 
 An agent-centered desktop workspace for **design → implement → evaluate**. Discuss an idea with Codex, edit the resulting diagrams and prototypes, confirm a design in Git, and implement it locally with recorded verification evidence. Share the entire development conversation through your repository.
 
+## Overhull in action
+
+Explore the [Team task board sample project](https://github.com/yi1z/sde-overhull-sample-project), which records two design rounds with diagrams, prototypes, approvals, verification evidence, and evaluation feedback. The editing views below use a fresh draft of the sample; the implementation view shows its completed, verified round.
+
+**Design together.** Model the task workflow with typed nodes and labeled connections alongside the recorded agent conversation.
+
+![Overhull's diagram editor showing the sample task workflow, design artifacts, and agent conversation](docs/screenshots/overhull-design.png)
+
+**Edit visual prototypes.** Compose the task board with reusable layout, content, and form blocks in the visual editor.
+
+![Overhull's visual prototype editor showing the task board, component palette, desktop viewport, and page properties](docs/screenshots/overhull-prototype.png)
+
+**Inspect implementation evidence.** Review the confirmed design, task coverage, development services, and passing checks behind the sample's recorded verification.
+
+![Overhull's Implement workspace showing four of four tasks covered, Agent verified status, and two passing checks](docs/screenshots/overhull-implementation.png)
+
+**Turn feedback into the next round.** Track observations and comments, then select feedback to seed another design iteration.
+
+![Overhull's Evaluate workspace showing resolved search-and-counts feedback selected for a next design round](docs/screenshots/overhull-evaluation.png)
+
+**Run the result.** The finished task board supports creating and editing tasks, changing status, searching, and filtering by priority.
+
+![The running Team task board with search, priority controls, task counts, and To do, Doing, and Done columns](docs/screenshots/team-task-board.png)
+
 ## Run locally
 
 Prerequisites: Node.js 22.12 or later, pnpm 10, Git, and an installed/authenticated Codex CLI. The app does not require a separate account or a hosted backend.
